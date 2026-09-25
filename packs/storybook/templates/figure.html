@@ -1,0 +1,20 @@
+{# SPDX-License-Identifier: MIT #}
+{#- One picture (or video), framed like a plate in an old book, then an italic caption.
+    In email a video becomes its poster image, linked to the web version. -#}
+{% set img_style = "max-width:100%;height:auto;border-radius:4px;border:6px solid #FFFFFF;box-shadow:0 1px 4px rgba(59,47,36,0.25)" %}
+<p style="margin:28px 0 8px;text-align:center">
+{% if media.kind == "video" %}
+{% if target == "email" %}
+  <a href="{{ read_url }}" style="display:inline-block"><img src="{{ media.poster }}" alt="{{ media.alt }}" style="{{ img_style }}"></a>
+{% else %}
+  <video controls preload="none" playsinline poster="{{ media.poster }}" style="{{ img_style }}">
+    <source src="{{ media.src }}" type="{{ media.mime }}">
+  </video>
+{% endif %}
+{% else %}
+  <img src="{{ media.src }}" alt="{{ media.alt }}" style="{{ img_style }}">
+{% endif %}
+</p>
+{% if caption %}
+<p style="margin:0 0 28px;text-align:center;font-family:Georgia,'Times New Roman',serif;font-size:14px;line-height:1.55;font-style:italic;color:#646575">{{ caption }}</p>
+{% endif %}

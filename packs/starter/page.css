@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: MIT */
+/* The page around the issue in the editor's preview (never part of the site or the email). */
+html { background: #f3f4f6; color-scheme: light; }
+html[data-theme="dark"] { background: #1b1d21; }
+body { margin: 0; padding: clamp(14px, 3vw, 36px) clamp(10px, 3vw, 32px); }
+.issue-body { max-width: 640px; margin: 0 auto; background: #ffffff; border-radius: 10px;
+              padding: clamp(20px, 4vw, 44px); box-shadow: 0 1px 3px rgba(0,0,0,.08);
+              font-family: Georgia, "Times New Roman", serif; }
+.issue-body h2, .issue-body h3 { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+.issue-body img, .issue-body video { max-width: 100%; height: auto; }

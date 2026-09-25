@@ -1,0 +1,24 @@
+# Optional, Linux only: keep slopmill running in the background as a systemd user service.
+# Most people do not need this: `uv run slopmill start` in a terminal is enough.
+#
+#   1. Edit WorkingDirectory below to where slopmill lives (%h is your home folder).
+#   2. cp deploy/slopmill.service ~/.config/systemd/user/
+#      systemctl --user daemon-reload && systemctl --user enable --now slopmill
+#   3. The link (with its access code) is in the log:
+#      journalctl --user -u slopmill | grep "?t="
+#
+# To reach it from other computers on your network, add --host 0.0.0.0 to ExecStart and
+# allow the port in your firewall. Anyone with the link can then use it and spend your key.
+[Unit]
+Description=slopmill newsletter editor
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/slopmill
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/uv run slopmill serve --workspace workspace --port 8440
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

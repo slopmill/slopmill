@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: MIT #}
+{#- A little poem, set centered and in italics, one line per paragraph. -#}
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:26px 0">
+  <tr><td style="text-align:center;padding:6px 0">
+{% if attrs.label %}
+    <p style="margin:0 0 10px;font-family:Georgia,'Times New Roman',serif;font-size:13px;letter-spacing:0.12em;text-transform:uppercase;font-weight:700;color:#9C6109">{{ attrs.label }}</p>
+{% endif %}
+{% for para in paragraphs %}
+    <p style="margin:0;font-family:Georgia,'Times New Roman',serif;font-size:17px;line-height:1.7;font-style:italic;color:#3B2F24">{{ para }}</p>
+{% endfor %}
+  </td></tr>
+</table>

@@ -1,0 +1,3 @@
+{# SPDX-License-Identifier: MIT #}
+<p style="text-align:center">{% if media.kind == "video" %}{% if target == "email" %}<a href="{{ read_url }}"><img src="{{ media.poster }}" alt="{{ media.alt }}"></a>{% else %}<video controls poster="{{ media.poster }}"><source src="{{ media.src }}" type="{{ media.mime }}"></video>{% endif %}{% else %}<img src="{{ media.src }}" alt="{{ media.alt }}">{% if media.light and target != "email" %}<img src="{{ media.light }}" alt="{{ media.alt }}">{% endif %}{% endif %}</p>
+{% if caption %}<p style="text-align:center">{{ caption }}</p>{% endif %}

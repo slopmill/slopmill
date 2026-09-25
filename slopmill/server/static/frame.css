@@ -1,0 +1,54 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* The editor's own marks inside the preview frame: highlighted words, notes left in the
+   text, unwritten prompts, blocks that did not draw. Loaded after the design's CSS so the
+   design cannot hide them; everything here is scoped to cmp- classes or data attributes. */
+[data-block] { scroll-margin-top: 80px; }
+[data-block]:not([data-kind="prompt"]):not([data-kind="error"]) { cursor: text; }
+.cmp-pending { border-left: 3px solid #5b7fb0; background: rgba(91,127,176,.08); padding: 10px 14px;
+               margin: 18px 0; font: 13px/1.5 "IBM Plex Sans", system-ui, sans-serif; color: #4d6f9f;
+               border-radius: 0 7px 7px 0; }
+.cmp-pending::before { content: "Prompt not written yet: generate to fill this in"; }
+.cmp-error { border-left: 3px solid #ef7d74; background: rgba(239,125,116,.08); padding: 8px 14px;
+             margin: 18px 0; font: 13px "IBM Plex Sans", system-ui, sans-serif; color: #d9534a; }
+.cmp-error ul { margin: 0; padding-left: 16px; }
+[data-problems] { box-shadow: -10px 0 0 -7px #ef7d74; }
+mark.hl { background: rgba(91,127,176,.22); color: inherit; border-bottom: 2px solid #5b7fb0;
+          border-radius: 2px; padding: 1px 0; cursor: pointer; }
+mark.hl.sent { background: rgba(79,211,168,.18); border-bottom-color: #4fd3a8; cursor: default; }
+mark.hl.flash, .cmp-note.flash { outline: 2px solid #5b7fb0; outline-offset: 2px; }
+.cmp-block-on { box-shadow: -10px 0 0 -7px #5b7fb0; }
+/* spelling and grammar: a fix in place (green), or the author's original put back (amber) */
+mark.fix { background: rgba(79,211,168,.22); color: inherit; border-bottom: 2px solid #2fae84;
+           border-radius: 2px; padding: 1px 0; cursor: pointer; }
+mark.fix.orig { background: rgba(224,164,79,.20); border-bottom: 2px dashed #c98a2e; }
+mark.fix:hover { outline: 1px solid currentColor; outline-offset: 1px; }
+
+/* a note, in the text, under the block it is about. A design's CSS loads first and may style
+   bare elements (button { display: none }, p { color: ... }); what the note needs to stay
+   usable is set with !important so no design rule can hide it. */
+.cmp-note { position: relative; margin: -6px 0 20px; padding: 9px 12px 9px 14px;
+            border-left: 3px solid #5b7fb0; border-radius: 0 8px 8px 0;
+            background: #e8eef6; color: #1b2330;
+            font: 13.5px/1.5 "IBM Plex Sans", system-ui, sans-serif; }
+html[data-theme="dark"] .cmp-note { background: #1d2d45; color: #eef1f5; }
+html[data-theme="dark"] .cmp-pending { color: #9fc0ea; }      /* 9.5:1 on the dark page; #4d6f9f is for light */
+.cmp-note .cmp-who { display: block; font: 500 10px/1.3 "IBM Plex Mono", ui-monospace, monospace;
+                     letter-spacing: .12em; text-transform: uppercase; opacity: .7; margin: 0 70px 4px 0;
+                     overflow-wrap: anywhere; }
+.cmp-note .cmp-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px;
+                      font-family: inherit; color: inherit; line-height: 1.5; }
+.cmp-note .cmp-err { margin: 4px 0 0; color: #d9534a; font-size: 12px; }
+.cmp-note .cmp-x { position: absolute; top: 6px; right: 6px; border: 1px solid currentColor; background: none;
+                   color: inherit; opacity: .6; border-radius: 6px; padding: 2px 7px; cursor: pointer;
+                   font: 500 11px "IBM Plex Sans", system-ui, sans-serif; }
+.cmp-note, .cmp-note .cmp-text { display: block !important; visibility: visible !important; }
+.cmp-note .cmp-x { display: inline-block !important; visibility: visible !important; pointer-events: auto !important;
+                   width: auto !important; height: auto !important; clip: auto !important; clip-path: none !important;
+                   transform: none !important; opacity: .75 !important; filter: none !important;
+                   color: inherit !important; background: transparent !important; font-size: 11px !important;
+                   line-height: 1.3 !important; text-indent: 0 !important; z-index: 1 !important; }
+.cmp-note { opacity: 1 !important; filter: none !important; clip-path: none !important; transform: none !important; }
+.cmp-note .cmp-text, .cmp-note .cmp-who { opacity: 1 !important; color: inherit !important; font-size: 13.5px !important; }
+.cmp-note .cmp-who { font-size: 10px !important; opacity: .7 !important; }
+mark.hl, mark.fix { display: inline !important; visibility: visible !important; opacity: 1 !important; }
+.cmp-note .cmp-x:hover { opacity: 1 !important; color: #d9534a !important; }

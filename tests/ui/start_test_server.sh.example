@@ -1,0 +1,9 @@
+#!/bin/bash
+# A test server for the browser suites: the fake writer, on :8441, in a throwaway workspace.
+# Copy, set WS, and run from the repository root. Stop it when the suite is done: a fake
+# writer left running looks exactly like a broken model to whoever opens its link.
+WS=${WS:-/tmp/slopmill-uiws}
+mkdir -p "$WS/issues/sandbox" && cp tests/fixtures/sandbox/issue.md "$WS/issues/sandbox/"
+echo testtoken123 > "$WS/.token"
+FAKE_LLM_DELAY=6 exec python3 -m slopmill serve --pack tests/packs/fixture --workspace "$WS" \
+  --host 127.0.0.1 --port 8441 --llm "python3 tests/fake_llm.py" --model-label "fake writer"

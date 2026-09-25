@@ -1,0 +1,4 @@
+{# SPDX-License-Identifier: MIT #}
+{% for para in paragraphs %}
+<p style="margin:{{ '30px 0 8px' if loop.first else '0 0 8px' }};font-size:16px;line-height:1.7;color:#6b7280;font-style:italic">{{ para }}</p>
+{% endfor %}

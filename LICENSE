@@ -1,0 +1,30 @@
+slopmill is licensed in parts. Each part says which license it is under, and every source
+file carries an SPDX line naming it.
+
+  PART                                  LICENSE              TEXT
+  The core: the compiler, the design    MIT                  LICENSES/MIT.txt
+  and voice-pack file formats, and the
+  library other programs can build on
+  The slopmill application: the editor, AGPL-3.0-or-later    LICENSES/AGPL-3.0.txt
+  its server, the model passes, the
+  command-line program
+  Voice packs (packs/*/voice/)          Each pack's own      packs/<name>/LICENSE.md
+                                        LICENSE.md           LICENSES/VOICE-PACKS.md
+  The name "slopmill" and its logo      Not licensed:        TRADEMARKS.md
+                                        trademarks
+
+Which files are which:
+
+  MIT                slopmill/__init__.py, doc.py, source.py, render.py, pack.py,
+                     pandoc.py, ids.py, errors.py, designs.py, voices.py;
+                     packs/*/ (the designs; not their voice/ folders); docs/; tests/
+  AGPL-3.0-or-later  slopmill/server/ (including the web editor in server/static/),
+                     slopmill/agent.py, proof.py, export.py, providers.py, usage.py, setup.py,
+                     cli.py, __main__.py
+
+In short: build your own tools on the core and the file formats however you like. If you
+change the slopmill application and let other people use your version, including over a
+network, share your changes under the AGPL. Your own voice packs, designs and issues are
+yours; slopmill claims nothing in them.
+
+Copyright (c) 2026 byteclaw and the slopmill contributors.

@@ -1,0 +1,9 @@
+{# SPDX-License-Identifier: MIT #}
+{#- Chapter titles, the way the books set them: centred, spaced capitals, under a short
+    line of honey. A level-3 heading is the quieter italic kind. -#}
+{% if level == 2 %}
+<p style="margin:40px auto 10px;width:56px;height:0;border-top:3px solid #E0A52E;font-size:0;line-height:0">&nbsp;</p>
+<h2 style="margin:0 0 18px;text-align:center;font-family:Georgia,'Times New Roman',serif;font-size:16px;line-height:1.5;letter-spacing:0.14em;text-transform:uppercase;font-weight:700;color:#3B2F24">{{ content }}</h2>
+{% else %}
+<h3 style="margin:28px 0 10px;font-family:Georgia,'Times New Roman',serif;font-size:19px;line-height:1.4;font-style:italic;font-weight:400;color:#3B2F24">{{ content }}</h3>
+{% endif %}

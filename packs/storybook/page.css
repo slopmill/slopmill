@@ -1,0 +1,9 @@
+/* SPDX-License-Identifier: MIT */
+/* The page around the issue in the editor's preview (never part of the site or email). */
+html { background: #F3EAD3; color-scheme: light; }
+html[data-theme="dark"] { background: #2A241C; }
+body { margin: 0; padding: clamp(14px, 3vw, 36px) clamp(10px, 3vw, 32px); }
+.issue-body { max-width: 640px; margin: 0 auto; background: #FFFCF3; border-radius: 8px;
+              padding: clamp(22px, 4vw, 48px); border: 1px solid #E6D9B8;
+              box-shadow: 0 2px 10px rgba(59, 47, 36, .10); }
+.issue-body img, .issue-body video { max-width: 100%; height: auto; }

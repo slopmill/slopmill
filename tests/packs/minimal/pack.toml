@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# A second pack, to prove nothing about any one publication is compiled into the engine.
+[pack]
+name = "minimal"
+asset_base = "https://cdn.example.org/"
+read_url = "https://example.org/{slug}"
+
+[meta]
+fields = ["title", "slug"]
+required = ["title", "slug"]
+
+[inline]
+link = ""
+accent = 'class="accent-{name}"'
+
+[accents]
+green = "#00aa00"
+
+[blocks]
+paragraph = "p.html"
+
+[blocks.heading]
+2 = "h.html"
+
+[components.figure]
+shape = "figure"
+template = "figure.html"

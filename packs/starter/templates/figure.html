@@ -1,0 +1,20 @@
+{# SPDX-License-Identifier: MIT #}
+{#- One picture or video, then an optional caption. In email a video becomes its poster
+    image, linked to the web version of the issue. -#}
+{% set img_style = "max-width:100%;height:auto;border-radius:6px" %}
+<p style="margin:26px 0 8px;text-align:center">
+{% if media.kind == "video" %}
+{% if target == "email" %}
+  <a href="{{ read_url }}" style="display:inline-block"><img src="{{ media.poster }}" alt="{{ media.alt }}" style="{{ img_style }}"></a>
+{% else %}
+  <video controls preload="none" playsinline poster="{{ media.poster }}" style="{{ img_style }}">
+    <source src="{{ media.src }}" type="{{ media.mime }}">
+  </video>
+{% endif %}
+{% else %}
+  <img src="{{ media.src }}" alt="{{ media.alt }}" style="{{ img_style }}">
+{% endif %}
+</p>
+{% if caption %}
+<p style="margin:0 0 26px;text-align:center;font-size:14px;line-height:1.5;color:#6b7280">{{ caption }}</p>
+{% endif %}

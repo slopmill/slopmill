@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: MIT
+# The design the test suite runs against: every block shape and component kind the engine
+# supports (a figure, labelled callouts, a fold, a one-paragraph closing), in plain HTML.
+# Not a real publication's design; nothing here is meant to look good.
+[pack]
+name = "fixture"
+asset_base = "https://example.com/newsletter/"
+read_url = "https://example.com/newsletter/issue/{slug}"
+assets_dir = "images"
+site_head = "site-style.html"
+page_css = "page.css"
+
+[meta]
+fields = ["number", "slug", "title", "subject", "preview_text", "og_image",
+          "issue_date", "listen_url", "audio_path", "clone_from"]
+required = ["number", "slug", "title", "subject", "preview_text", "og_image", "issue_date"]
+types = { number = "int" }
+
+[inline]
+link = 'style="color:#2255aa"'
+strong = ""
+emphasis = ""
+accent = 'style="color:{colour}"'
+
+[accents]
+green = "#118844"
+blue = "#2255aa"
+amber = "#aa7700"
+red = "#bb2233"
+
+[voice]
+system = "voice/writer.md"
+files = ["voice/VOICE.md", "voice/specimens/001.md"]
+
+[blocks]
+paragraph = "paragraph.html"
+quote = "quote.html"
+list = "list.html"
+
+[blocks.heading]
+2 = "heading.html"
+
+[components.figure]
+shape = "figure"
+template = "figure.html"
+
+[components.previously]
+shape = "container"
+template = "callout.html"
+attrs = { label = "optional" }
+paragraphs = [1, 20]
+params = { word = "Previously" }
+describe = 'a callback to a past issue: ::: {.previously label="Issue 21"} one short paragraph that links the issue :::'
+
+[components.concept]
+shape = "container"
+template = "callout.html"
+attrs = { label = "optional" }
+paragraphs = [1, 20]
+params = { word = "Concept" }
+describe = 'a plain definition of one term: ::: {.concept label="The Term"} one to three sentences :::'
+
+[components.fold]
+shape = "container"
+template = "fold.html"
+paragraphs = [0, 1]
+params = { label = "Below the fold" }
+
+[components.closing]
+shape = "container"
+template = "closing.html"
+paragraphs = [1, 1]

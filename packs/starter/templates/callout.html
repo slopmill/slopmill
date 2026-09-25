@@ -1,0 +1,9 @@
+{# SPDX-License-Identifier: MIT #}
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:24px 0">
+  <tr><td style="border-left:4px solid {{ params.border }};background:{{ params.background }};padding:16px 20px;border-radius:0 6px 6px 0">
+    <p style="margin:0 0 8px;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:700;color:{{ params.border }}">{{ attrs.label or params.word }}</p>
+{% for para in paragraphs %}
+    <p style="margin:{{ '0' if loop.last else '0 0 10px' }};font-size:16px;line-height:1.65;color:{{ params.text }}">{{ para }}</p>
+{% endfor %}
+  </td></tr>
+</table>

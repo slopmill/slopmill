@@ -1,0 +1,5 @@
+{# SPDX-License-Identifier: MIT #}
+{% set tag = "ol" if ordered else "ul" %}
+<{{ tag }}{% if ordered and start != 1 %} start="{{ start }}"{% endif %}>
+{% for item in items %}  <li>{{ item }}</li>
+{% endfor %}</{{ tag }}>

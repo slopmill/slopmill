@@ -1,0 +1,81 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>slopmill</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/theme.js"></script>
+</head>
+<body>
+<header class="bar">
+  <span class="logo">slopmill</span>
+  <div class="issue-pick">
+    <select id="issue-select" aria-label="Issue"></select>
+    <button class="ghost" id="new-issue" type="button">+ New</button>
+  </div>
+  <nav class="steps" role="tablist" aria-label="Screens">
+    <button role="tab" data-screen="compose" aria-selected="true">1 · Plan</button>
+    <button role="tab" data-screen="build" aria-selected="false">2 · Draft</button>
+    <button role="tab" data-screen="review" aria-selected="false">3 · Proof</button>
+  </nav>
+  <span class="save-state" id="save-state" aria-live="polite"></span>
+  <button class="meter" id="meter" type="button" hidden aria-label="Token use"></button>
+  <button class="ghost small" id="models-btn" type="button">Models</button>
+  <span class="themes" role="group" aria-label="Theme">
+    <button data-theme-set="light" aria-pressed="false">Light</button>
+    <button data-theme-set="dark" aria-pressed="false">Dark</button>
+    <button data-theme-set="auto" aria-pressed="false">Auto</button>
+  </span>
+</header>
+
+<div class="demo-bar" id="demo-bar" hidden>
+  <b>Demo</b> · No AI model is connected: the writing is prepared in advance, and your copy is
+  deleted when you leave. <a href="https://slopmill.org" target="_top">Get slopmill</a> to write in your own voice.
+</div>
+<div class="banner" id="banner" hidden></div>
+
+<main class="stage">
+  <section class="main" id="main" aria-live="off"></section>
+  <aside class="side">
+    <div id="side-top"></div>
+    <div class="chat-wrap">
+      <h4>Chat</h4>
+      <div class="chat-log" id="chat-log"></div>
+      <form class="chat-form" id="chat-form">
+        <textarea id="chat-input" rows="2" placeholder="Ask anything, or say what to change…" aria-label="Message to the model"></textarea>
+        <div class="chat-btns">
+          <button type="submit" class="send" id="chat-send" title="The model answers here and changes nothing (Ctrl+Enter)">Ask</button>
+          <button type="button" class="ghost small" id="chat-do"></button>
+        </div>
+      </form>
+      <p class="hint" id="chat-hint"></p>
+    </div>
+  </aside>
+</main>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-head"><h3 id="modal-title"></h3><button class="ghost" id="modal-close" type="button">Close</button></div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<div class="comment-pop" id="comment-pop" hidden>
+  <button class="pop-btn" id="pop-open" type="button">Comment</button>
+  <button class="pop-btn" id="pop-edit" type="button">Edit text</button>
+  <form id="pop-form" hidden>
+    <p class="pop-quote" id="pop-quote"></p>
+    <textarea id="pop-note" rows="3" placeholder="What should change here?"></textarea>
+    <div class="pop-actions"><button type="button" class="ghost" id="pop-cancel">Cancel</button><button type="submit" class="send">Add</button></div>
+  </form>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

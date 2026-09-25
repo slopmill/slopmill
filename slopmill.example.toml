@@ -1,0 +1,39 @@
+# Copy to WORKSPACE/slopmill.toml and edit, or let `uv run slopmill setup` write it.
+# Keys never go in this file: it names the environment variable that holds one, and the
+# key itself goes in WORKSPACE/.env as NAME=key. See docs/PROVIDERS.md.
+
+[editor]
+design = "starter"                        # the default design for new issues
+
+[writer]
+provider = "openai"                       # openai | anthropic | command
+model = "gpt-6-sol"
+api_key_env = "OPENAI_API_KEY"
+reasoning_effort = "high"
+# base_url = "https://api.openai.com/v1"  # or OpenRouter, Ollama, LM Studio...
+
+# provider = "anthropic"
+# model = "claude-opus-5-5"
+# api_key_env = "ANTHROPIC_API_KEY"
+
+# provider = "command"                    # a local program: CMD -s SYSTEM PROMPT FILES...
+# command = "my-writer --model gpt-6-sol"     # your program: -s SYSTEM PROMPT FILES...
+# label = "GPT-6 Sol"
+
+[images]
+provider = "openai"                       # openai | command | none
+model = "gpt-image-2"
+size = "1536x1024"
+api_key_env = "OPENAI_API_KEY"
+
+[checker]                                 # the free spelling and grammar check (no AI, no tokens)
+url = "https://api.languagetool.org/v2"   # LanguageTool's free service; your own server works too; "" turns it off
+language = "en-US"
+
+# [plan]                                  # the meter's subscription windows (OpenClaw only)
+# command = "openclaw status --usage --json"
+# provider = "openai"
+
+[research]                                # looking things up for Chart: prompts and "research …" prompts
+provider = "auto"                         # auto: your model searches the web itself when its API can (OpenAI, Anthropic), else DuckDuckGo · writer | duckduckgo | command | off
+# command = "my-search --json {query}"    # prints [{"title", "url", "snippet"}]

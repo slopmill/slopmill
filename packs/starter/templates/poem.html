@@ -1,0 +1,11 @@
+{# SPDX-License-Identifier: MIT #}
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:24px 0">
+  <tr><td style="text-align:center;padding:4px 0">
+{% if attrs.label %}
+    <p style="margin:0 0 8px;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:700;color:#1d5fd1">{{ attrs.label }}</p>
+{% endif %}
+{% for para in paragraphs %}
+    <p style="margin:0;font-size:17px;line-height:1.7;font-style:italic;color:#222222">{{ para }}</p>
+{% endfor %}
+  </td></tr>
+</table>

@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: MIT
+# storybook: the example design. Warm cream like an old book page, amber links, a rose
+# box for asides, slate captions, moss and cornflower for emphasis, chapter headings set
+# "In Which". Every text color passes WCAG AA (4.5:1) on the page.
+#
+# Its voice (voice/) writes in the manner of A. A. Milne. See LICENSE.md for what
+# you may do with it.
+
+[pack]
+name = "storybook"
+asset_base = "https://example.com/newsletter/images/"
+read_url = "https://example.com/newsletter/{slug}"
+assets_dir = "images"
+site_head = "site-style.html"
+page_css = "page.css"
+
+[meta]
+fields = ["number", "slug", "title", "subject", "preview_text", "issue_date"]
+required = ["slug", "title"]
+types = { number = "int" }
+
+[inline]
+link = 'style="color:#8F5410;text-decoration:underline;text-decoration-color:#E0A52E"'
+strong = 'style="color:#2E251C"'
+emphasis = ""
+accent = 'style="color:{colour}"'
+
+# The same four names as the starter design, so an issue can switch designs freely.
+[accents]
+green = "#44652A"     # moss
+blue = "#2B5A8A"      # cornflower
+amber = "#9C6109"     # amber
+red = "#A63D2C"       # brick
+
+[voice]
+system = "voice/writer.md"
+files = ["voice/VOICE.md", "voice/samples/1919-the-pleasure-of-writing.md",
+         "voice/samples/1926-a-visit-that-ran-long.md", "voice/samples/1928-a-game-on-the-bridge.md"]
+
+[blocks]
+paragraph = "paragraph.html"
+quote = "quote.html"
+list = "list.html"
+
+[blocks.heading]
+2 = "heading.html"
+3 = "heading.html"
+
+[components.figure]
+shape = "figure"
+template = "figure.html"
+
+[components.note]
+shape = "container"
+template = "note.html"
+attrs = { label = "optional" }
+paragraphs = [1, 6]
+params = { word = "A Small Note" }
+describe = 'a boxed aside: ::: {.note label="Short Title"} one or two short paragraphs :::'
+
+[components.poem]
+shape = "container"
+template = "poem.html"
+attrs = { label = "optional" }
+paragraphs = [1, 16]
+describe = 'a short poem, one line per paragraph: ::: {.poem label="Title"} lines, each as its own paragraph :::'
+
+[components.closing]
+shape = "container"
+template = "closing.html"
+paragraphs = [1, 3]

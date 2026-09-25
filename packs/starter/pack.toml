@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: MIT
+# The starter design: a clean, light newsletter. Copy it to make your own:
+#   slopmill design export starter --out mine.design.toml
+# then change the name, colors and templates, and upload it in the app (Design → Manage).
+
+[pack]
+name = "starter"
+# Where your published images will live, and where each issue can be read on the web.
+# Change both to your own site when you have one; until then the editor uses the pictures
+# saved next to each issue.
+asset_base = "https://example.com/newsletter/images/"
+read_url = "https://example.com/newsletter/{slug}"
+assets_dir = "images"
+site_head = "site-style.html"
+page_css = "page.css"
+
+[meta]
+fields = ["number", "slug", "title", "subject", "preview_text", "issue_date"]
+required = ["slug", "title"]
+types = { number = "int" }
+
+[inline]
+link = 'style="color:#1d5fd1;text-decoration:underline"'
+strong = ""
+emphasis = ""
+accent = 'style="color:{colour}"'
+
+# **words**{.green} in the text colors them.
+[accents]
+green = "#1f8a4c"
+blue = "#1d5fd1"
+amber = "#b86e00"
+red = "#c2352b"
+
+# The first-run voice: a short brief and a rules file to fill in. Your own writing samples
+# go in through the app (Voice → Manage → Upload).
+[voice]
+system = "voice/writer.md"
+files = ["voice/VOICE.md"]
+
+[blocks]
+paragraph = "paragraph.html"
+quote = "quote.html"
+list = "list.html"
+
+[blocks.heading]
+2 = "heading.html"
+3 = "heading.html"
+
+[components.figure]
+shape = "figure"
+template = "figure.html"
+
+[components.note]
+shape = "container"
+template = "callout.html"
+attrs = { label = "optional" }
+paragraphs = [1, 6]
+params = { border = "#1d5fd1", background = "#eef3fc", text = "#1f2a3d", word = "Note" }
+describe = 'a boxed aside: ::: {.note label="Short title"} one or two short paragraphs :::'
+
+[components.closing]
+shape = "container"
+template = "closing.html"
+paragraphs = [1, 3]
+
+# A little poem, one line per paragraph (the example design has one too, so an issue can
+# move between the two).
+[components.poem]
+shape = "container"
+template = "poem.html"
+attrs = { label = "optional" }
+paragraphs = [1, 16]
+describe = 'a short poem, one line per paragraph: ::: {.poem label="Title"} lines, each as its own paragraph :::'

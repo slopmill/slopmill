@@ -1,0 +1,5 @@
+{# SPDX-License-Identifier: MIT #}
+<table role="presentation" style="width:100%"><tr><td>
+<p>{{ params.word }}{% if attrs.label %} &middot; {{ attrs.label }}{% endif %}</p>
+{% for para in paragraphs %}<p>{{ para }}</p>
+{% endfor %}</td></tr></table>
