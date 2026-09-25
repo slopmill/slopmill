@@ -139,6 +139,10 @@ green = "#1f8a4c"          # **words**{.green} in an issue come out this color
 "paragraph.html" = '''<p style="margin:0 0 18px;font-size:17px;line-height:1.7;color:#222222">{{ content }}</p>'''
 ```
 
+## Buy me a coffee
+
+slopmill is free and open source, and it will stay that way. If you want to buy me a coffee on [Ko-fi](https://ko-fi.com/slopmill), it helps me keep slopmill maintained and pays for the demo's small server.
+
 ## License
 
 slopmill is licensed in parts; the table says which license applies.
