@@ -794,7 +794,7 @@ def test_r1_searching_stops_at_the_page_cap_and_the_time_limit():
     s = Fresh()
     plan = {f"i{k}": ["q1", "q2", "q3"] for k in range(4)}
     research.gather(plan, {k: "x" for k in plan}, s, 50_000, fetch=fake_fetch({}))
-    assert s.queries == ["q1", "q1"]     # 4 pages each from the first search; then the cap of 8
+    assert s.queries == ["q1"] * 4 + ["q2"] * 4 + ["q3"] * 4   # every planned search runs, in turns
     t = [0.0]
     slow = FakeSearch(many[:1])
     research.gather({"a": ["q1", "q2", "q3"]}, {"a": "x"}, slow, 50_000, fetch=fake_fetch({}),
@@ -940,14 +940,15 @@ def test_r2_design_colours_that_vanish_on_white_are_skipped():
 
 def test_r3_requests_past_the_cap_are_named_to_the_writer(make, monkeypatch):
     monkeypatch.setattr(research, "fetch_public", fake_fetch({"https://example.org/sizes": PAGE}))
-    prompts = "".join(f"::: {{.prompt #c{i}}}\nChart: research thing {i}\n:::\n\n" for i in range(6))
+    n = research.MAX_ITEMS + 2          # two past the cap
+    prompts = "".join(f"::: {{.prompt #c{i}}}\nChart: research thing {i}\n:::\n\n" for i in range(n))
     text = DOC.replace("{#z}", prompts + "{#z}")
-    llm = Script("".join(f"=== SEARCH c{i} ===\nq{i}\n=== END ===\n" for i in range(4)),
+    llm = Script("".join(f"=== SEARCH c{i} ===\nq{i}\n=== END ===\n" for i in range(research.MAX_ITEMS)),
                  lambda s, p, f: "=== NOTE ===\nx\n=== END ===")
     c, _ = make(llm=llm, searcher=FakeSearch(), text=text)
     c.post("/api/issues/099-test/generate", json={}, headers=H)
     wait_job(c)
-    assert "#c4, #c5 were not researched" in llm.calls[1]["prompt"]
+    assert f"#c{n - 2}, #c{n - 1} were not researched" in llm.calls[1]["prompt"]
 
 
 def test_r3_an_unknown_source_number_is_never_printed():

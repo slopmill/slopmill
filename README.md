@@ -2,7 +2,7 @@
 
 slopmill helps you write with an AI model that sounds like YOU wrote it. I built it for a weekly newsletter, but you can use it for anything you write regularly: blog posts, op-eds, reports, updates for a team, even a story. Your writer file, voice file and writing samples tell the model how you sound. Your colors and HTML templates live in one style file.
 
-You write the parts you care about, leave short prompts for the rest, and fix what the model got wrong. Then you see the issue exactly as your readers will. It runs on your computer, in your browser. Your text goes only to the AI service you pick, using your own API key. When you ask it to research something, the search words also go to a search engine (turn that off with `[research] provider = "off"`).
+You write the parts you care about, leave short prompts for the rest, and fix what the model got wrong. Then you see the issue exactly as your readers will. It runs on your computer, in your browser. Your text goes only to the AI service you pick, using your own API key. Before writing a prompt it looks things up, so a few short search words also go to a search engine (switch that off per prompt, or everywhere with `[research] provider = "off"`).
 
 <picture>
   <source media="(prefers-reduced-motion: reduce)" srcset="docs/media/walkthrough-poster.jpg">
@@ -19,14 +19,14 @@ It comes with an example voice in the manner of A. A. Milne and an example story
 
 ## How it works
 
-1. **Plan:** Write your own paragraphs and leave prompts for the model where you want help. Something like “two paragraphs on why I switched tools, about 100 words.” Start a prompt with “Image:” for a picture or “Chart:” for a chart. Say “research,” “look up” or “latest numbers” in a prompt when you want slopmill to look things up first.
+1. **Plan:** Write your own paragraphs and leave prompts for the model where you want help. Something like “two paragraphs on why I switched tools, about 100 words.” Start a prompt with “Image:” for a picture or “Chart:” for a chart. Each prompt looks things up on the web first; switch that off on any prompt that should use only your words. Put facts and links you already have in the Background box at the top.
 2. **Draft:** Read what the model wrote and edit any block. Saving locks it as your words. The model won't rewrite locked text again. It can suggest changes, which you accept or reject.
 3. **Proof:** See the issue drawn in your style file. Click a block to leave the model a note or edit it yourself. Check spelling and grammar (a free check with LanguageTool, or one with the AI that knows your voice), and click a fix to put your original words back. Then **Download** it: a web page with the pictures inside, a Word file, or a zip with an email version, Markdown and the pictures.
 
 While you work:
 
 - The chat beside the editor has “Ask” for questions. It changes nothing in the issue. “Change the issue” sends your request to be done. If an answer suggests a prompt, click “Add to Plan.”
-- The model works out chart numbers; slopmill draws them, so every label and number matches. Image models garble numbers, so charts never use one. “Research” works in chart prompts and chat questions too. With an OpenAI or Anthropic key, the model searches the web itself. Otherwise slopmill searches DuckDuckGo and reads the top pages. The sources go to the model, the chart names its sites, and the links show under it on Draft. If nothing turns up, the model is told to say so.
+- The model works out chart numbers; slopmill draws them, so every label and number matches. Image models garble numbers, so charts never use one. Chart prompts look up their numbers too, and chat questions do when you say “research.” With an OpenAI or Anthropic key, the model searches the web itself. Otherwise slopmill searches DuckDuckGo and reads the top pages. The sources go to the model, the chart names its sites, and the links show under it on Draft. If nothing turns up, the model is told to say so.
 - “+ Your picture” adds your photo beside “+ AI picture.” Location and camera details are removed before it is saved. On Draft, “Use my own picture” swaps it in.
 
 The diagram shows how your files feed each step.

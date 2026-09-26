@@ -176,7 +176,16 @@ async function init() {
     S.app = await api("/api/state");
   } catch (e) { banner(e.message, true); return; }
   fillIssueSelect();
-  if (S.app.demo) $("#demo-bar").hidden = false;
+  if (S.app.trial) {
+    // The hosted trial: a real writer, for a week or a budget (SPEC-TRIAL 5).
+    const t = S.app.trial;
+    $("#demo-bar").replaceChildren(el("b", { text: "Trial" }),
+      ` · Runs until ${t.ends} · about $${t.left_usd.toFixed(2)} of $${t.budget_usd.toFixed(0)} is left for everyone · `
+      + "AI pictures are off: they cost far more than text (you can upload your own). Your copy is private and "
+      + "lasts while you use it: download your issue before you go. ",
+      el("a", { href: "https://slopmill.org", target: "_top", text: "Get slopmill" }), " to keep going with your own key.");
+    $("#demo-bar").hidden = false;
+  } else if (S.app.demo) $("#demo-bar").hidden = false;
   const want = location.hash.slice(1);
   const first = S.app.issues.find((i) => i.slug === want) || S.app.issues[0];
   if (!first) { renderEmpty(); return; }
@@ -219,6 +228,7 @@ async function loadIssue(slug, keepScreen) {
     S.log = []; S.seqAtLoad = st.seq; S.lastSeq = 0; S.preview = null; S.reveal = {};
     S.dirty = false; S.editSeq = 0; S.undoArmed = false;
     if (!keepScreen) S.screen = running() ? "build" : "compose";
+    rwLoad();
     connectEvents();
     S.usage = null; loadUsage();
   }
@@ -235,6 +245,23 @@ function takeIssueInfo(st) {
   S.nextRequest = st.next_request; S.fields = st.fields || []; S.required = st.required || [];
   S.accents = st.accents || {}; S.lintOn = !!st.lint;
   S.asking = !!st.asking; S.sources = st.sources || {}; S.figure = st.figure !== false;
+  S.boxes = st.boxes || []; S.backgroundMax = st.background_max || 40960;
+  S.headings = st.headings || null;
+  S.factsCurrent = !!st.facts_current;
+  // Typing in the Background box that has not reached the server yet wins over its copy.
+  if (!S.bgDirty || S.bgSlug !== S.slug) {
+    S.background = st.background || ""; S.bgDirty = false;
+    // Notes typed here that never reached the server (a refused save, a closed tab) come
+    // back, and save again.
+    let kept = null;
+    try { kept = localStorage.getItem("slopmill-bg:" + S.slug); } catch (err) { /* private window */ }
+    if (kept !== null && kept !== S.background) {
+      S.background = kept; S.bgDirty = true; S.bgSlug = S.slug;
+      clearTimeout(S.bgTimer); S.bgTimer = setTimeout(saveBackground, 800);
+    } else if (kept !== null) {
+      try { localStorage.removeItem("slopmill-bg:" + S.slug); } catch (err) { /* private window */ }
+    }
+  }
   paintMill();          // the server says whether a question is still being answered
 }
 
@@ -297,7 +324,27 @@ function onEvent(ev, replay) {
     // Edit buttons on Draft follow the model: disabled the moment a pass starts anywhere.
     if (!replay && S.screen === "build") renderBuildFlow();
     if (!replay && ev.status !== "running") {
-      reloadDoc();
+      // Rewrites sent while this pass ran go next, all together (not after a Stop or a failure).
+      const toProof = ev.kind === "headings" && S.headingsThenProof;
+      if (toProof) S.headingsThenProof = false;
+      reloadDoc().then(() => {
+        if (toProof) {
+          if (ev.status !== "done") toast("The section headings were not added; Proof shows the issue as it is.", true);
+          else if (S.headings && S.headings.needed) toast("Some sections may still need a heading: going to Proof again adds them.");
+          go("review", null, { noHeadings: true });
+        } else {
+          // Rewrites that were sent go first; a Proof that waited goes after them.
+          const rewriting = ev.status === "done" && rwIds().some((pid) => S.rewrites[pid].go);
+          if (ev.status === "done") rwKick();
+          if (S.headingsPending && !rewriting && !running()) {
+            S.headingsPending = false;
+            // The Proof that was asked for always happens: with headings when they are still
+            // needed and the pass went well, straight away otherwise.
+            if (ev.status === "done" && S.headings && S.headings.needed) runHeadingsThenProof();
+            else go("review", null, { noHeadings: true });
+          }
+        }
+      });
       loadUsage();
       // A generate pass stays on Draft: reading what it wrote is that step's job. A revise
       // was started from Proof, where its proposals are, so it goes back there.
@@ -323,10 +370,26 @@ function onEvent(ev, replay) {
 }
 
 /* ── navigation ────────────────────────────────────────────────────────── */
-async function go(screen, focusId) {
+async function go(screen, focusId, opts = {}) {
   if (editDirty()) { toast("Save or cancel the text you are editing first.", true); return; }
   closeEditor();
   if (S.dirty && !(await flush())) { toast("Not saved yet; fix the problem shown at the top first.", true); return; }
+  // On the way to Proof, a design that asks for section headings gets the missing ones
+  // first (SPEC-HEADINGS 4). Draft shows the pass; Proof opens when it is done.
+  if (screen === "review" && S.screen !== "review" && !opts.noHeadings && S.headings && S.headings.needed && running()) {
+    // The model is busy: stay on Draft; the headings go in when it is free, then Proof opens.
+    S.headingsPending = true;
+    screen = "build";
+    toast("Proof opens once the model is free and the section headings are in.");
+  } else if (screen === "review" && S.screen !== "review" && !opts.noHeadings && S.headings && S.headings.needed && !running()) {
+    try {
+      const r = await api(`/api/issues/${encodeURIComponent(S.slug)}/headings`, { method: "POST", body: {} });
+      S.headingsThenProof = true;
+      S.jobBlocks = {}; S.log = [];
+      if (r.job) S.job = r.job;             // as generate() does: Draft shows the pass at once
+      screen = "build";
+    } catch (e) { toast("Could not add the section headings: " + e.message, true); }
+  }
   S.screen = screen;
   hidePop();
   render();
@@ -383,10 +446,13 @@ function renderCompose() {
   const sub = el("p", { class: "doc-sub" },
     `Issue ${S.meta.number || "—"} · one panel · select text to change what it is · `,
     el("button", { type: "button", text: "details", onclick: () => $("details.meta")?.setAttribute("open", "") }));
+  const keep = (e) => e.preventDefault();      // the text being edited keeps its focus and selection
   const selbar = el("div", { class: "selbar", id: "selbar" },
-    el("button", { type: "button", "data-kind": "prose", text: "Prose", onmousedown: (e) => e.preventDefault(), onclick: () => convertFocused("prose") }),
-    el("button", { type: "button", "data-kind": "prompt", text: "Prompt", onmousedown: (e) => e.preventDefault(), onclick: () => convertFocused("prompt") }));
+    el("button", { type: "button", "data-kind": "prose", text: "Prose", onmousedown: keep, onclick: () => convertFocused("prose") }),
+    el("button", { type: "button", "data-kind": "prompt", text: "Prompt", onmousedown: keep, onclick: () => convertFocused("prompt") }));
   const list = el("div", { class: "blocks", id: "blocks" });
+  // Where each block sits among the ones that can move (a prompt moves with its draft).
+  S.unitPos = new Map(unitsOf(S.blocks).map((u, k, all) => [u[0], [k, all.length]]));
   // Plan is your words and your prompts. What the model wrote is read and edited on Draft.
   S.blocks.forEach((b, i) => {
     if (b.type === "draft") return;
@@ -395,11 +461,28 @@ function renderCompose() {
   });
   const addEnd = el("div", { class: "add-end" }, ...addButtons(S.blocks.length, locked));
   const c = counts();
-  const cta = el("button", { class: "cta", type: "button", disabled: locked, onclick: () => (c.write ? generate() : go("build")) },
-    c.write ? "Write the drafts →" : "Read the draft →");
+  const n = rwIds().length;
+  const label = c.write && n ? `Write ${c.write} · rewrite ${n} →` : n ? `Rewrite ${n} draft${n === 1 ? "" : "s"} →`
+    : c.write ? "Write the drafts →" : "Read the draft →";
+  const cta = el("button", { class: "cta", type: "button", disabled: locked,
+    onclick: () => (n ? rwRun(toWrite().map((p) => p.id)) : c.write ? generate() : go("build")) }, label);
   const note = el("span", { class: "cta-note", id: "cta-note" });
-  $("#main").replaceChildren(el("div", { class: "doc-head" }, title, sub), selbar,
-    el("span", { class: "selhint", id: "selhint" }), list, addEnd, el("div", { class: "cta-row" }, cta, note));
+  const drafted = S.blocks.filter((b) => b.type === "prompt" && draftFor(b.id));
+  const all = drafted.length && !locked ? el("button", { class: "linkish rw-all", type: "button",
+    text: n >= drafted.length ? "take them all off the list" : "rewrite all drafts",
+    onclick: () => { if (n >= drafted.length) S.rewrites = {}; else drafted.forEach((p) => { if (!S.rewrites[p.id]) S.rewrites[p.id] = { note: "", go: false }; });
+      rwSave(); renderCompose(); } }) : null;
+  const suggest = el("button", { class: "ghost small suggest-titles", type: "button", disabled: locked || S.titlesBusy,
+    title: "the writer suggests titles from what is on the page", text: S.titlesBusy ? "Thinking…" : "Suggest titles",
+    onclick: suggestTitles });
+  const picks = S.titles && S.titles.length ? el("div", { class: "title-picks", role: "list" },
+    ...S.titles.map((t) => el("button", { class: "title-pick", type: "button", role: "listitem", text: t, onclick: () => pickTitle(t) })),
+    el("span", { class: "title-acts" },
+      el("button", { class: "linkish", type: "button", text: "More", disabled: S.titlesBusy, onclick: suggestTitles }),
+      el("button", { class: "linkish", type: "button", "aria-label": "Close the suggestions", text: "×", onclick: () => { S.titles = null; renderCompose(); } }))) : null;
+  $("#main").replaceChildren(el("div", { class: "doc-head" }, el("div", { class: "title-row" }, title, suggest), picks, sub),
+    backgroundPanel(locked), selbar,
+    el("span", { class: "selhint", id: "selhint" }), list, addEnd, el("div", { class: "cta-row" }, cta, note, all));
   list.querySelectorAll(".blk:not(.prose):not(.draft):not(.component) textarea, .blk.editing textarea").forEach(autosize);
   updateSelbar();
   paintCtaNote();
@@ -415,7 +498,7 @@ function paintCtaNote() {
   const over = nr && nr.bytes > nr.limit;
   note.classList.toggle("bad", !!over);
   note.textContent = running() ? "the model is working; editing is paused"
-    : over ? `too big to send: about ${kb(nr.bytes)} of ${kb(nr.limit)}. Turn off some voice files (Voice → Manage)`
+    : over ? `too big to send: about ${kb(nr.bytes)} of ${kb(nr.limit)}. ${(S.background || "").trim() ? "Shorten the Background notes or turn" : "Turn"} off some voice files (Voice → Manage)`
     : (c.write ? `${c.write} prompt${c.write > 1 ? "s" : ""} to write · your words are sent as they are` : c.prompt ? "every prompt has a draft" : "no prompts: it is all your words") + (c.write ? size : "");
 }
 
@@ -427,10 +510,13 @@ function adder(i) {
 function addButtons(i, locked) {
   return [
     el("button", { type: "button", text: "+ Prose", disabled: locked, onclick: () => insertBlock(i, "prose") }),
+    el("button", { type: "button", text: "+ Heading", disabled: locked, onclick: () => insertBlock(i, "heading") }),
     el("button", { type: "button", text: "+ Prompt", disabled: locked, onclick: () => insertBlock(i, "prompt") }),
     el("button", { type: "button", text: "+ AI picture", disabled: locked, title: pictureHint(), onclick: () => insertBlock(i, "picture") }),
     el("button", { type: "button", text: "+ Your picture", disabled: locked, title: "upload a picture of your own", onclick: () => pictureDialog({ after: anchorBefore(i) }) }),
-    el("button", { type: "button", text: "+ Chart", disabled: locked, title: "the model works out the numbers (say “research” to have it look them up) and slopmill draws the chart", onclick: () => insertBlock(i, "chart") })];
+    el("button", { type: "button", text: "+ Chart", disabled: locked, title: "the model looks up the numbers (or uses yours) and slopmill draws the chart", onclick: () => insertBlock(i, "chart") }),
+    (S.boxes || []).length ? el("button", { type: "button", text: "+ Box", disabled: locked,
+      title: "one of this design's boxes: " + S.boxes.map((x) => x.title).join(", "), onclick: () => boxDialog(i) }) : null];
 }
 /* The saved block a new picture goes after: the nearest one above position i that has an
    ID and text (a new, still empty block is not in the file yet). "" is the top. */
@@ -446,6 +532,7 @@ function pictureHint() {
 function blockEl(b, locked) {
   const problem = b.id && S.problems[b.id] ? { text: S.problems[b.id].join(" · ") } : null;
   const wrap = el("div", { class: `blk ${b.type}`, "data-id": b.id || "" });
+  let said = "";        // the writer's note on a prompt, shown under its words
   if (b.type === "prose" && /^#{1,6}\s/.test(b.text)) wrap.classList.add("heading");
   if (b.type === "draft" && b.attrs.stale === "1") wrap.classList.add("stale");
   if (locked) wrap.classList.add("locked");
@@ -453,14 +540,20 @@ function blockEl(b, locked) {
   const ta = el("textarea", { rows: 1, spellcheck: b.type === "prose" || b.type === "prompt" || b.type === "draft",
     "aria-label": `${b.type} block`, readonly: locked || b.type === "comment", class: viewable ? "viewable" : null,
     placeholder: b.type === "prompt" ? (isPicture(b.text) ? "Image: describe the picture…"
-      : isChart(b.text) ? "Chart: what to chart, with your numbers, or say “research” and it looks them up…"
-      : "What should go here? Notes, links, how long, what tone… (Image: for a picture, Chart: for a chart, “research” to look things up)") : b.type === "prose" ? "Write…" : null });
+      : isChart(b.text) ? "Chart: what to chart. It looks up the numbers unless you give them…"
+      : "What should go here? Notes, links, how long, what tone… It looks things up on the web first. (Image: for a picture, Chart: for a chart)")
+      : b.type === "prose" ? "Write…" : null });
   ta.value = b.text;
   if (viewable) {
     ta.addEventListener("blur", () => {
-      if (!wrap.isConnected) return;
-      wrap.classList.remove("editing");
-      view.innerHTML = b.text.trim() ? md(b.type === "component" ? stripFence(b.text) : b.text, true) : '<span class="empty-view">empty</span>';
+      const fold = () => {
+        if (!wrap.isConnected || document.activeElement === ta) return;
+        wrap.classList.remove("editing");
+        view.innerHTML = b.text.trim() ? md(b.type === "component" ? stripFence(b.text) : b.text, true) : '<span class="empty-view">empty</span>';
+      };
+      // Folding back to text moves everything below it. While the press that took the focus
+      // is still down, wait: otherwise the button being pressed slides out from under it.
+      if (S.pointerDown) S.foldLater = fold; else fold();
     });
   }
   const view = viewable ? el("div", { class: "view", tabindex: locked ? null : "0", role: "button",
@@ -483,9 +576,11 @@ function blockEl(b, locked) {
     if (pic || chart) wrap.classList.add("picture");
     wrap.append(el("span", { class: "tag" }, pic ? "Picture prompt" : chart ? "Chart prompt" : "Prompt", el("span", { class: "id", text: "#" + b.id }),
       pic && !(S.app && S.app.pictures) ? el("span", { class: "warn-note", text: "pictures are off: see Models" }) : null,
+      !pic || chart ? researchSwitch(b, locked) : null,
       el("span", { class: "acts" },
-        d && !locked ? el("button", { class: "ghost small", type: "button", text: "Rewrite", title: "write its draft again from this prompt", onclick: () => generate([b.id]) }) : null,
-        !d && !locked ? el("button", { class: "ghost small danger", type: "button", text: "Delete", onclick: () => deleteBlock(b) }) : null)));
+        ...moveButtons(b, locked),
+        d && !locked ? rwToggle(b) : null,
+        !d && !locked ? deleteButton(b) : null)));
     if (d) {
       const stale = d.attrs.stale === "1";
       wrap.classList.add("has-draft");
@@ -493,6 +588,10 @@ function blockEl(b, locked) {
         el("span", { text: stale ? "Changed since its draft" : "Drafted" }),
         el("button", { class: "linkish", type: "button", text: "Read it on Draft →", onclick: () => go("build", d.id) })));
     }
+    said = noteFor(b.id, d && d.id);
+    const rw = S.rewrites && S.rewrites[b.id];
+    if (d && rw) wrap.append(el("p", { class: "rwnote" }, rw.go ? "Next up: " : "On the rewrite list: ",
+      rw.note ? `“${rw.note}”` : "written again from this prompt"));
   } else if (b.type === "draft") {
     const stale = b.attrs.stale === "1";
     const drawn = b.attrs.picture === "1";
@@ -502,15 +601,37 @@ function blockEl(b, locked) {
         !locked ? el("button", { class: "ghost small", type: "button", text: "Keep as my words", onclick: () => keepDraft(b) }) : null,
         !locked ? el("button", { class: "ghost small danger", type: "button", text: "Discard", onclick: () => deleteBlock(b) }) : null)));
   } else if (b.type === "component") {
-    wrap.append(el("span", { class: "tag" }, b.attrs.class || "component", el("span", { class: "id", text: "#" + b.id }),
-      el("span", { class: "acts" }, !locked ? el("button", { class: "ghost small danger", type: "button", text: "Delete", onclick: () => deleteBlock(b) }) : null)));
+    const box = (S.boxes || []).find((x) => x.name === b.attrs.class);
+    wrap.append(el("span", { class: "tag" }, box ? box.title : b.attrs.class || "component", el("span", { class: "id", text: "#" + b.id }),
+      el("span", { class: "acts" }, ...moveButtons(b, locked), !locked ? deleteButton(b) : null)));
   } else if (b.type === "comment") {
-    wrap.append(el("span", { class: "tag", text: "Note · not published" }));
+    wrap.append(el("span", { class: "tag" }, "Note · not published",
+      el("span", { class: "acts" }, ...moveButtons(b, locked), !locked ? deleteButton(b) : null)));
+  } else if (b.type === "prose" && !locked) {
+    // Your words have no label; their buttons show when you point at them or type in them.
+    wrap.append(el("span", { class: "tools" }, ...moveButtons(b, locked), deleteButton(b)));
+    // The formatting bar sits on the top edge of the paragraph you are typing in.
+    wrap.append(el("div", { class: "fmtbar", role: "toolbar", "aria-label": "Formatting" },
+      ...FORMATS.map((f) => el("button", { type: "button", "data-fmt": f.kind, text: f.text, title: f.title,
+        "aria-label": f.title, onmousedown: (e) => e.preventDefault(), onclick: () => formatFocused(f.kind) }))));
   }
   if (view) wrap.append(view);
   wrap.append(ta);
+  if (b.type === "prompt" && said) wrap.append(el("p", { class: "wnote", text: "The writer says: " + said }));
   if (problem) { wrap.classList.add("has-problem"); wrap.append(el("p", { class: "problem", text: problem.text })); }
   return wrap;
+}
+
+// A press anywhere: remember it is down, and fold a paragraph that lost focus to it only
+// once it is over (after its click has landed).
+document.addEventListener("pointerdown", () => { S.pointerDown = true; }, true);
+for (const ev of ["pointerup", "pointercancel"]) {
+  document.addEventListener(ev, () => {
+    S.pointerDown = false;
+    const fold = S.foldLater;
+    S.foldLater = null;
+    if (fold) setTimeout(fold, 0);
+  }, true);
 }
 
 function autosize(ta) {
@@ -591,7 +712,7 @@ function updateSelbar() {
   const hint = $("#selhint");
   const ta = b && document.querySelector(`.blk[data-id="${CSS.escape(b.id)}"] textarea`);
   const partial = ta && ta.selectionEnd > ta.selectionStart && !(ta.selectionStart === 0 && ta.selectionEnd === ta.value.length);
-  bar.querySelectorAll("button").forEach((btn) => {
+  bar.querySelectorAll("button[data-kind]").forEach((btn) => {
     const kind = btn.dataset.kind;
     btn.classList.toggle("on", !!b && b.type === kind);
     btn.disabled = !b || running() || !(b.type === "prose" || b.type === "prompt") || (b.type === kind && !partial)
@@ -643,6 +764,14 @@ function convertFocused(kind) {
 }
 
 function insertBlock(i, type) {
+  if (type === "heading") {
+    const h = { type: "prose", id: newId(), text: "## ", attrs: {} };
+    S.blocks.splice(i, 0, h);
+    renderCompose();
+    S.focusId = h.id;
+    focusBlock(h.id, "end");
+    return;
+  }
   const lead = { picture: "Image: ", chart: "Chart: " }[type];
   const b = { type: lead ? "prompt" : type, id: newId(), text: lead || "", attrs: {} };
   S.blocks.splice(i, 0, b);
@@ -709,8 +838,323 @@ function pictureDialog(opts) {
 
 async function deleteBlock(b) {
   if (b.type === "prompt" && draftFor(b.id)) { toast("Lock or discard its draft on Draft first."); return; }
+  // A discarded draft (or a deleted prompt) comes off the rewrite list for good.
+  const pid = b.type === "draft" ? b.attrs.for : b.type === "prompt" ? b.id : null;
+  if (pid && S.rewrites && S.rewrites[pid]) { delete S.rewrites[pid]; rwSave(); }
   S.blocks = S.blocks.filter((x) => x !== b);
   markDirty(); render();
+}
+
+/* Delete asks twice for anything with words in it: there is no undo for your own typing. */
+function deleteButton(b) {
+  let armed = false;
+  return el("button", { class: "ghost small danger", type: "button", text: "Delete", title: "delete this block",
+    onmousedown: (e) => e.preventDefault(),
+    onclick: (e) => {
+      if (b.text.trim() && !armed) {
+        armed = true; e.currentTarget.textContent = "Sure?";
+        const btn = e.currentTarget;
+        setTimeout(() => { armed = false; if (btn.isConnected) btn.textContent = "Delete"; }, 4000);
+        return;
+      }
+      deleteBlock(b);
+    } });
+}
+
+/* The headings pass a busy model put off: it runs now, and Proof shows the result. */
+async function runHeadingsThenProof() {
+  try {
+    const r = await api(`/api/issues/${encodeURIComponent(S.slug)}/headings`, { method: "POST", body: {} });
+    S.headingsThenProof = true;
+    if (r.job) S.job = r.job;
+    S.jobBlocks = {}; S.log = [];
+    S.screen = "build";            // Draft shows the pass; Proof opens when it is done
+    render();
+  } catch (e) { toast("Could not add the section headings: " + e.message, true); }
+}
+
+/* Titles the writer suggests from what is on the page (SPEC-BASICS L). */
+async function suggestTitles() {
+  const slug = S.slug;
+  if (!(await flush())) { toast("Save the issue first: the problem is shown at the top.", true); return; }
+  S.titlesBusy = true; renderCompose();
+  try {
+    const r = await api(`/api/issues/${encodeURIComponent(slug)}/titles`, { method: "POST", body: {} });
+    if (slug === S.slug) S.titles = r.titles || [];
+    if (slug === S.slug && !S.titles.length) toast("No titles came back; try again.", true);
+  } catch (e) { toast(e.message, true); }
+  S.titlesBusy = false;
+  if (slug === S.slug && S.screen === "compose") renderCompose();
+}
+function pickTitle(t) {
+  S.meta.title = t;
+  S.titles = null;
+  markDirty(); renderCompose(); renderSide();
+}
+
+/* ── rewrites: several at once, each with its own direction (SPEC-BASICS K) ──
+   S.rewrites = {prompt id: {note, go}}. go: sent from Draft, so it runs as soon as the model
+   is free; otherwise it waits for a Rewrite button. Kept in this browser, per issue. */
+function rwKey() { return "slopmill-rw:" + S.slug; }
+function rwSave() { try { localStorage.setItem(rwKey(), JSON.stringify(S.rewrites || {})); } catch (e) { /* private window */ } }
+function rwLoad() {
+  let got = {};
+  try { got = JSON.parse(localStorage.getItem(rwKey()) || "{}") || {}; } catch (e) { got = {}; }
+  S.rewrites = {};
+  for (const [pid, v] of Object.entries(got)) {
+    if (S.blocks.some((b) => b.type === "prompt" && b.id === pid) && draftFor(pid)) S.rewrites[pid] = { note: String(v.note || ""), go: !!v.go };
+  }
+}
+/* What is on the list and can still be rewritten: the prompt is there and still has a draft
+   (a discarded draft is not brought back). */
+function rwIds() {
+  return Object.keys(S.rewrites || {}).filter((pid) => S.blocks.some((b) => b.type === "prompt" && b.id === pid) && draftFor(pid));
+}
+function rwToggle(b) {
+  const on = !!(S.rewrites && S.rewrites[b.id]);
+  return el("button", { class: "ghost small" + (on ? " on" : ""), type: "button", "aria-pressed": on ? "true" : "false",
+    text: on ? "✓ Rewrite" : "Rewrite", title: on ? "on the rewrite list: click to take it off" : "put it on the rewrite list; the button below writes them all in one go",
+    onclick: () => { if (on) delete S.rewrites[b.id]; else S.rewrites[b.id] = { note: "", go: false }; rwSave(); renderCompose(); } });
+}
+/* Put one on the list without sending it: the list goes together, from the bar. */
+function rwAdd(pid, note) {
+  S.rewrites[pid] = { note: (note || "").trim(), go: false };
+  S.rwOpen = null; S.rwDraft = null;
+  rwSave(); render();
+}
+/* Send one rewrite: now if the model is free, otherwise next, with whatever else lines up. */
+function rwSend(pid, note) {
+  S.rewrites[pid] = { note: (note || "").trim(), go: true };
+  S.rwOpen = null; S.rwDraft = null;
+  rwSave();
+  if (running()) { toast("Next up: it goes as soon as this pass finishes."); render(); return; }
+  rwRun([], true);
+}
+/* One pass for the list (only what was sent, when goOnly) plus any `extra` prompt IDs. */
+async function rwRun(extra, goOnly) {
+  const ids = rwIds().filter((pid) => !goOnly || S.rewrites[pid].go);
+  const targets = [...new Set([...(extra || []), ...ids])];
+  if (!targets.length || running()) return;
+  const taken = {};
+  const notes = {};
+  for (const pid of ids) { taken[pid] = S.rewrites[pid]; if (S.rewrites[pid].note) notes[pid] = S.rewrites[pid].note; delete S.rewrites[pid]; }
+  rwSave();
+  const ok = await generate(targets, "", notes);
+  if (!ok) { Object.assign(S.rewrites, taken); rwSave(); render(); }
+}
+function rwKick() {
+  if (running() || !S.rewrites) return;
+  if (rwIds().some((pid) => S.rewrites[pid].go)) rwRun([], true);
+  else if (S.screen === "build") renderBuild();
+}
+function rewriteBox(pid) {
+  const cur = (S.rewrites && S.rewrites[pid]) || {};
+  const ta = el("textarea", { id: "rw-text", class: "rw-text", rows: 2, "aria-label": "What should change",
+    placeholder: "What should change? (Leave it empty to write it again from the prompt.) Enter sends it now; Add to list lines it up.",
+    oninput: (e) => { S.rwDraft = e.target.value; },
+    onkeydown: (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); rwSend(pid, ta.value); }
+      else if (e.key === "Escape") { S.rwOpen = null; S.rwDraft = null; renderBuildFlow(); }
+    } });
+  ta.value = S.rwDraft != null ? S.rwDraft : cur.note || "";
+  return el("div", { class: "rwbox" }, ta, el("div", { class: "edit-row" },
+    el("button", { class: "ghost", type: "button", text: "Cancel", onclick: () => { S.rwOpen = null; S.rwDraft = null; renderBuildFlow(); } }),
+    el("button", { class: "ghost", type: "button", text: "Add to list", title: "line it up; the bar at the top sends the whole list in one go",
+      onclick: () => rwAdd(pid, ta.value) }),
+    el("button", { class: "send", type: "button", text: running() ? "Send (next up)" : "Rewrite now", onclick: () => rwSend(pid, ta.value) })));
+}
+
+/* The blocks in moving order: each with the draft written from it, if it is a prompt. A
+   draft whose prompt is gone rides with the block before it. */
+function unitsOf(blocks) {
+  const units = [], placed = new Set();
+  for (const b of blocks) {
+    if (placed.has(b)) continue;
+    placed.add(b);
+    if (b.type === "draft") { if (units.length) units[units.length - 1].push(b); else units.push([b]); continue; }
+    const u = [b];
+    if (b.type === "prompt") {
+      const d = blocks.find((x) => x.type === "draft" && x.attrs.for === b.id);
+      if (d && !placed.has(d)) { u.push(d); placed.add(d); }
+    }
+    units.push(u);
+  }
+  return units;
+}
+/* Move a block (a prompt with its draft) past the next one up or down. On Draft, notes
+   (which only Plan shows) are stepped over, so every press visibly moves the section. */
+function moveBlock(b, dir, onDraft) {
+  if (running() || (onDraft && S.edit)) return;
+  const us = unitsOf(S.blocks);
+  const hidden = (u) => onDraft && u.length === 1 && u[0].type === "comment";
+  const k = us.findIndex((u) => u[0] === b);
+  let j = k + dir;
+  while (j >= 0 && j < us.length && hidden(us[j])) j += dir;
+  if (k < 0 || j < 0 || j >= us.length) return;
+  const [u] = us.splice(k, 1);
+  us.splice(j, 0, u);
+  S.blocks = us.flat();
+  markDirty(); render();
+  const shown = onDraft ? u[u.length - 1] : b;          // on Draft a prompt is seen as its draft
+  const n = document.querySelector(`${onDraft ? "#flow" : "#blocks"} [data-id="${CSS.escape(shown.id)}"]`);
+  if (n) { n.scrollIntoView({ block: "nearest" }); n.classList.add("flash"); setTimeout(() => n.classList.remove("flash"), 900); }
+}
+function moveButtons(b, locked, onDraft) {
+  if (locked) return [];
+  const [k, n] = ((onDraft ? S.flowPos : S.unitPos) && (onDraft ? S.flowPos : S.unitPos).get(b)) || [0, 1];
+  const mv = (text, dir, label, off) => el("button", { class: "ghost small mv", type: "button", text, title: label,
+    "aria-label": label, disabled: off, onmousedown: (e) => e.preventDefault(), onclick: () => moveBlock(b, dir, onDraft) });
+  return [mv("↑", -1, "Move up", k === 0), mv("↓", 1, "Move down", k >= n - 1)];
+}
+
+/* A prompt looks things up on the web before it is written, unless this is switched off. */
+function researchSwitch(b, locked) {
+  const on = b.attrs.research !== "off";
+  return el("button", { class: "ghost small research" + (on ? " on" : ""), type: "button", disabled: locked,
+    "aria-pressed": on ? "true" : "false",
+    title: on ? "It searches the web for facts and links before writing this. Click to write from your words alone."
+      : "It writes from your words alone. Click to have it search the web first.",
+    text: on ? "Looks it up" : "Your words only",
+    onclick: () => {
+      if (on) b.attrs.research = "off"; else delete b.attrs.research;
+      markDirty(); renderCompose();
+    } });
+}
+
+/* An issue detail with nothing in it. A new issue's front matter writes empty ones as null. */
+function blankMeta(v) { return v == null || /^\s*(null|~)?\s*$/i.test(String(v)); }
+
+function noteFor(...ids) {
+  const n = (S.review && S.review.notes) || {};
+  for (const i of ids) if (i && n[i]) return n[i];
+  return "";
+}
+
+/* The design's boxes: pick one and it goes in with a line to replace. */
+function boxDialog(i) {
+  const list = el("div", { class: "box-list" }, ...(S.boxes || []).map((x) => el("button", { class: "ghost", type: "button",
+    text: x.title, onclick: () => { closeModal(true); insertBox(i, x); } })));
+  openModal("Add a box", el("p", { class: "hint", text: `The boxes this design (${S.design}) draws. Replace the words in it after it goes in.` }), list);
+}
+function insertBox(i, box) {
+  const PLACE = "Write here.";      // render.BOX_PLACEHOLDER: a box still saying it cannot be downloaded
+  const label = box.label ? ` label="${box.title.replace(/"/g, "")}"` : "";
+  const b = { type: "component", id: newId(), text: `::: {.${box.name}${label}}\n${PLACE}\n:::`, attrs: { class: box.name } };
+  S.blocks.splice(i, 0, b);
+  markDirty(); renderCompose();
+  S.focusId = b.id;
+  focusBlock(b.id, "end");
+  const ta = document.querySelector(`.blk[data-id="${CSS.escape(b.id)}"] textarea`);
+  if (ta) { const at = ta.value.indexOf(PLACE); if (at >= 0) ta.setSelectionRange(at, at + PLACE.length); }
+}
+
+/* The formatting bar on your own paragraphs: Markdown, typed for you, around the selection. */
+const FORMATS = [
+  { kind: "heading", text: "H", title: "Heading: make this block a heading (or back)" },
+  { kind: "bold", text: "B", title: "Bold" },
+  { kind: "italic", text: "I", title: "Italic" },
+  { kind: "link", text: "Link", title: "Link the selected words to a web address" },
+  { kind: "list", text: "List", title: "Bulleted list" },
+  { kind: "quote", text: "Quote", title: "Quote" },
+];
+function formatFocused(kind) {
+  const b = focusedBlock();
+  if (!b || running() || b.type !== "prose") return;
+  const ta = document.querySelector(`.blk[data-id="${CSS.escape(b.id)}"] textarea`);
+  if (!ta) return;
+  let v = ta.value;
+  const s = ta.selectionStart, e = ta.selectionEnd;
+  const wrap = (l, r, empty) => {
+    const mid = v.slice(s, e) || empty;
+    v = v.slice(0, s) + l + mid + r + v.slice(e);
+    return [s + l.length, s + l.length + mid.length];
+  };
+  let sel;
+  if (kind === "bold") sel = wrap("**", "**", "bold words");
+  else if (kind === "italic") sel = wrap("*", "*", "these words");
+  else if (kind === "link") {
+    const url = (window.prompt("Link to which web address?", "https://") || "").trim();
+    if (!url || url === "https://") { ta.focus(); return; }
+    if (!/^https?:\/\/\S+$/i.test(url)) { toast("A web address starts with https:// and has no spaces.", true); ta.focus(); return; }
+    sel = wrap("[", `](${url})`, "link text");
+  } else if (kind === "heading") {
+    v = /^#{1,6}\s/.test(v) ? v.replace(/^#{1,6}\s+/, "") : "## " + v.replace(/\s*\n\s*/g, " ").trim();
+    sel = [v.length, v.length];
+  } else if (kind === "list" || kind === "quote") {
+    const mark = kind === "list" ? "- " : "> ";
+    const ls = v.lastIndexOf("\n", s - 1) + 1;
+    const nl = v.indexOf("\n", Math.max(e - (e > s ? 1 : 0), s));
+    const le = nl < 0 ? v.length : nl;
+    const lines = v.slice(ls, le).split("\n");
+    const all = lines.every((l) => l.startsWith(mark) || !l.trim());
+    const out = lines.map((l) => !l.trim() ? l : all ? l.slice(mark.length) : l.startsWith(mark) ? l : mark + l).join("\n");
+    v = v.slice(0, ls) + out + v.slice(le);
+    sel = [ls, ls + out.length];
+  } else return;
+  ta.value = v;
+  ta.focus();
+  ta.setSelectionRange(sel[0], sel[1]);
+  onBlockInput(b, ta);
+  updateSelbar();
+}
+
+/* ── the Background box: the author's notes for the writer ─────────────── */
+function backgroundPanel(locked) {
+  const text = S.background || "";
+  const ta = el("textarea", { class: "bg-text", id: "bg-text", rows: 3, disabled: locked, "aria-label": "Background notes for the writer",
+    placeholder: "Facts, numbers, links and your own notes for this issue. The writer uses them for every prompt; they are never printed.",
+    oninput: (e) => {
+      S.background = e.target.value; S.bgDirty = true; S.bgSlug = S.slug;
+      try { localStorage.setItem("slopmill-bg:" + S.slug, S.background); } catch (err) { /* private window */ }
+      autosize(e.target); paintBgCount();
+      clearTimeout(S.bgTimer); S.bgTimer = setTimeout(saveBackground, 800);
+    } });
+  ta.value = text;
+  const d = el("details", { class: "background", open: text.trim() || S.bgOpen ? true : null,
+    ontoggle: (e) => { S.bgOpen = e.currentTarget.open; if (S.bgOpen) autosize(ta); } },
+    el("summary", {}, el("b", { text: "Background" }), el("span", { class: "bg-sub", text: " · notes for the writer, never printed" }),
+      el("span", { class: "bg-state", id: "bg-state" })),
+    ta, el("p", { class: "bg-count", id: "bg-count" }));
+  requestAnimationFrame(() => { if (ta.isConnected) autosize(ta); paintBgCount(); });
+  return d;
+}
+function paintBgCount() {
+  const n = $("#bg-count");
+  if (!n) return;
+  const bytes = new TextEncoder().encode(S.background || "").length;
+  n.textContent = bytes ? `${kb(bytes)} of ${kb(S.backgroundMax || 40960)}` : "";
+  n.classList.toggle("bad", bytes > (S.backgroundMax || 40960));
+}
+function setBg(text, bad) {
+  const n = $("#bg-state");
+  if (n) { n.textContent = text ? " · " + text : ""; n.classList.toggle("bad", !!bad); }
+}
+/* One save at a time, in order: a slow first save must not land after a later one. True
+   when what is in the box is on the server. */
+function saveBackground() {
+  clearTimeout(S.bgTimer);
+  S.bgChain = (S.bgChain || Promise.resolve()).then(bgSaveOnce, bgSaveOnce);
+  return S.bgChain;
+}
+async function bgSaveOnce() {
+  const slug = S.bgSlug || S.slug, text = S.background;
+  if (!S.bgDirty || !slug) return true;
+  setBg("saving…");
+  try {
+    const r = await api(`/api/issues/${encodeURIComponent(slug)}/background`, { method: "PUT", body: { text } });
+    if (S.background === text && S.bgSlug === slug) {
+      S.bgDirty = false;
+      try { localStorage.removeItem("slopmill-bg:" + slug); } catch (err) { /* private window */ }
+    }
+    if (slug === S.slug) {
+      if (r.next_request) { S.nextRequest = r.next_request; paintCtaNote(); }
+      setBg(S.bgDirty ? "saving…" : "saved");
+    }
+    return !S.bgDirty;
+  } catch (e) {
+    if (slug === S.slug) setBg("not saved: " + e.message, true);
+    return false;
+  }
 }
 
 async function keepDraft(b) {
@@ -733,6 +1177,8 @@ function markDirty() {
 }
 /* Save until nothing is left unsaved. False if a save was refused. */
 async function flush() {
+  // The Background notes go first: a pass or a chat question reads them when it starts.
+  if (S.bgDirty && !(await saveBackground())) return false;
   for (let i = 0; i < 5 && S.dirty; i++) {
     if (!(await saveNow())) return false;
   }
@@ -753,7 +1199,8 @@ function saveNow() {
 async function doSave() {
   setSave("Saving…");
   const slug = S.slug, seq = S.editSeq;
-  const blocks = S.blocks.filter((b) => b.type === "comment" || b.text.trim())
+  // An empty block is not saved; a heading with no words ("## ") is empty too.
+  const blocks = S.blocks.filter((b) => b.type === "comment" || (b.type === "prose" ? b.text.replace(/^#{1,6}\s*$/, "") : b.text).trim())
     .map((b) => ({ type: b.type, id: b.id, text: b.text, attrs: Object.fromEntries(Object.entries(b.attrs || {}).filter(([k]) => k !== "stale")) }));
   try {
     const r = await api(`/api/issues/${encodeURIComponent(slug)}/doc`, { method: "PUT", body: { base: S.rev, meta: S.meta, blocks } });
@@ -765,6 +1212,8 @@ async function doSave() {
     const had = JSON.stringify(S.problems);
     S.problems = r.problems || {};
     if (r.next_request) { S.nextRequest = r.next_request; paintCtaNote(); }
+    if (r.headings) S.headings = r.headings;
+    if (r.facts_current !== undefined) S.factsCurrent = !!r.facts_current;
     setSave("Saved"); banner(S.problems[""] ? "Problem: " + S.problems[""].join(" · ") : null, !!S.problems[""]);
     if (had !== JSON.stringify(S.problems) && S.screen === "compose") paintProblems();
     if (!S.dirty) setSave("Saved");
@@ -811,11 +1260,11 @@ async function refreshStale() {
 }
 
 /* ── generate / revise ─────────────────────────────────────────────────── */
-async function generate(targets, direction) {
+async function generate(targets, direction, notes) {
   const slug = S.slug;
   if (!(await flush())) { toast("Save the issue first: the problem is shown at the top.", true); return false; }
   try {
-    const r = await api(`/api/issues/${encodeURIComponent(slug)}/generate`, { method: "POST", body: { targets: targets || null, direction: direction || "" } });
+    const r = await api(`/api/issues/${encodeURIComponent(slug)}/generate`, { method: "POST", body: { targets: targets || null, direction: direction || "", notes: notes || {} } });
     if (slug !== S.slug) return true;        // the author moved on; the pass still runs
     S.jobBlocks = {}; S.reveal = {};
     if (r.job) { S.job = r.job; S.log = []; }
@@ -893,27 +1342,40 @@ function renderBuild() {
   const r = running();
   const kind = S.job ? S.job.kind : null;
   const head = el("div", { class: "doc-head" },
-    el("h1", { class: "doc-title", text: r ? ({ revise: "Revising", proof: "Proofreading" }[kind] || "Drafting") + " " + (S.meta.title || "the issue") : (S.meta.title || "Untitled issue") }),
+    el("h1", { class: "doc-title", text: r ? ({ revise: "Revising", proof: "Proofreading", headings: "Adding section headings to", facts: "Checking the facts in" }[kind] || "Drafting") + " " + (S.meta.title || "the issue") : (S.meta.title || "Untitled issue") }),
     el("p", { class: "doc-sub", text: r ? (kind === "revise" ? "only the blocks you commented on are sent back"
       : kind === "proof" ? "checking spelling and grammar · the fixes show on Proof"
+      : kind === "headings" ? "this design wants every section headed · nothing else changes · Proof opens when it is done"
       : "your words are locked · only prompts are being written")
       : "read it through · Edit any block to change it · saving locks it as your words" }));
   const flow = el("div", { class: "flow", id: "flow" });
   const empty = !S.blocks.some((b) => b.type !== "comment");
+  const n = rwIds().length;
+  const bar = n ? el("div", { class: "rwbar", id: "rwbar" },
+    el("span", { text: r ? `${n} rewrite${n === 1 ? "" : "s"} next up · ${n === 1 ? "it goes" : "they go"} when this pass finishes`
+      : `${n} section${n === 1 ? "" : "s"} to rewrite` }),
+    !r ? el("button", { class: "send", type: "button", text: `Rewrite ${n === 1 ? "it" : "them"} now →`, onclick: () => rwRun([]) }) : null,
+    el("button", { class: "ghost small", type: "button", text: "Clear", onclick: () => { S.rewrites = {}; rwSave(); render(); } })) : null;
   const next = el("div", { class: "cta-row" },
     !r && !empty ? el("button", { class: "cta", type: "button", onclick: () => go("review") }, "Proof it →") : null,
     empty ? el("span", { class: "cta-note", text: "nothing here yet · start on Plan" }) : null);
-  $("#main").replaceChildren(head, flow, next);
+  $("#main").replaceChildren(head, bar || "", flow, next);
   renderBuildFlow();
 }
 
 function renderBuildFlow() {
   const flow = $("#flow");
   if (!flow) return;
+  // A pass repaints this list as it goes: a rewrite direction being typed must survive that.
+  const typing = document.activeElement && document.activeElement.id === "rw-text";
+  const caret = typing ? document.activeElement.selectionStart : 0;
   const kids = [];
   const now = Date.now();
   const r = running();
   let editShown = false;
+  // Where each section sits among the ones Draft shows (a prompt counts as its draft).
+  const vis = unitsOf(S.blocks).filter((u) => !(u.length === 1 && u[0].type === "comment"));
+  S.flowPos = new Map(vis.map((u, k) => [u[0], [k, vis.length]]));
   for (const b of S.blocks) {
     const st = S.jobBlocks[b.id];
     if (b.type === "comment") continue;
@@ -949,6 +1411,8 @@ function renderBuildFlow() {
   if (S.edit && !S.edit.dialog && !editShown) kids.push(S.edit.node);
   flow.replaceChildren(...kids);
   if (S.edit && !S.edit.dialog) autosize(S.edit.ta);
+  const rwt = $("#rw-text");
+  if (rwt && typing) { rwt.focus(); rwt.setSelectionRange(caret, caret); }
 }
 
 /* One block on Draft: whose words these are, the text, and what can be done to it. */
@@ -967,7 +1431,10 @@ function draftBlock(b, r) {
       onclick: (e) => e.currentTarget.classList.toggle("clamp") });
     acts = [act("Edit", () => openEditor(b)),
       act("Lock", () => keepDraft(b), null, "keep it exactly as it is, as your words"),
-      act(stale ? "Rewrite it" : "Rewrite", () => generate([b.attrs.for]), null, "write it again from the prompt"),
+      el("button", { class: "ghost small", type: "button", text: stale ? "Rewrite it…" : "Rewrite…",
+        title: "say what should change (or nothing, to write it again from the prompt); you can keep sending more",
+        onclick: () => { S.rwOpen = b.attrs.for; S.rwDraft = ((S.rewrites || {})[b.attrs.for] || {}).note || "";
+          renderBuildFlow(); const t = $("#rw-text"); if (t) t.focus(); } }),
       b.attrs.picture === "1" || b.attrs.chart === "1" ? act("Use my own picture", () => pictureDialog({ replace: b.id }), null, "upload your own picture in place of this one") : null,
       act("Discard", () => deleteBlock(b), "danger")];
   } else if (b.type === "prose") {
@@ -982,8 +1449,18 @@ function draftBlock(b, r) {
   const found = srcs.length ? el("p", { class: "sources" }, "Sources: ",
     ...srcs.map((x, i) => [i ? " · " : "", el("a", { href: x.url, target: "_blank", rel: "noopener noreferrer", text: x.title || x.url }),
       x.snippet_only ? el("span", { class: "muted", text: " (from the search result; the page could not be read)" }) : null]).flat()) : null;
+  const said = b.type === "draft" ? noteFor(b.attrs.for, b.id) : noteFor(b.id);
+  const rw = b.type === "draft" && S.rewrites && S.rewrites[b.attrs.for];
+  // Move buttons: a draft moves with the prompt it came from (hidden on this step).
+  const head = b.type === "draft" ? S.blocks.find((x) => x.type === "prompt" && x.id === b.attrs.for) || b : b;
+  acts.push(...moveButtons(head, r || !!(S.edit && S.edit.id), true));
   return el("div", { class: cls, "data-id": b.id },
-    el("span", { class: "tag" }, el("span", { text: tag }), el("span", { class: "acts" }, ...acts.filter(Boolean))), from, body, found);
+    el("span", { class: "tag" }, el("span", { text: tag }), el("span", { class: "acts" }, ...acts.filter(Boolean))), from,
+    b.type === "draft" && S.rwOpen === b.attrs.for ? rewriteBox(b.attrs.for) : null,
+    rw ? el("p", { class: "rwnote" }, rw.go ? "Next up: " : "On the rewrite list: ", rw.note ? `“${rw.note}”` : "written again from its prompt",
+      el("button", { class: "linkish", type: "button", text: " take it off", onclick: () => { delete S.rewrites[b.attrs.for]; rwSave(); render(); } })) : null,
+    body, found,
+    said ? el("p", { class: "wnote", text: "The writer says: " + said }) : null);
 }
 
 /* ── the Edit box (Draft in place, Proof in a dialog) ──────────────────── */
@@ -1257,9 +1734,10 @@ function sizeFrame() {
 function refreshMarks() {
   const d = frameDoc();
   if (!d) return;
-  d.querySelectorAll("mark.hl, mark.fix").forEach((m) => { const p = m.parentNode; while (m.firstChild) p.insertBefore(m.firstChild, m); p.removeChild(m); p.normalize(); });
+  d.querySelectorAll("mark.hl, mark.fix, mark.fact").forEach((m) => { const p = m.parentNode; while (m.firstChild) p.insertBefore(m.firstChild, m); p.removeChild(m); p.normalize(); });
   highlightComments();
   highlightFixes();
+  highlightFacts();
   renderNotes();
   sizeFrame();
 }
@@ -1563,7 +2041,7 @@ function sideCompose() {
     const long = f === "preview_text";
     const input = el(long ? "textarea" : "input", { id: "f-" + f, rows: long ? 3 : null, disabled: running(),
       oninput: (e) => { S.meta[f] = e.target.value; if (f === "title") { const t = $(".doc-title"); if (t && t !== e.target) t.value = e.target.value; } markDirty(); } });
-    input.value = S.meta[f] == null ? "" : S.meta[f];
+    input.value = blankMeta(S.meta[f]) ? "" : S.meta[f];     // a new issue's file says "null"
     return el("div", { class: "field" }, el("label", { for: "f-" + f }, f.replace(/_/g, " "), req ? el("span", { class: "req", text: " *" }) : null), input);
   });
   return [voicePanel(), designPanel(),
@@ -1636,7 +2114,7 @@ function sideReview() {
   const queued = S.review.comments.filter((c) => c.status === "queued");
   const props = S.review.proposals.filter((p) => p.status === "pending");
   const lint = S.preview && S.preview.lint;
-  const kids = [proofPanel(), downloadPanel()];
+  const kids = [proofPanel(), factsPanel(), downloadPanel()];
   kids.push(el("div", {}, el("h4", { text: `${queued.length} edit${queued.length === 1 ? "" : "s"} queued` }),
     queued.length ? el("div", {}, ...queued.map((c) => el("div", { class: "note" },
       el("span", { class: "who", text: c.quote ? `on “${c.quote.slice(0, 40)}${c.quote.length > 40 ? "…" : ""}”` : blockLabel(c.block) }),
@@ -1726,7 +2204,10 @@ const DOWNLOADS = [
 ];
 function downloadPanel() {
   const busy = S.downloading;
+  const empty = (S.required || []).filter((f) => blankMeta(S.meta[f]));
   return el("div", {}, el("h4", { text: "Download" }), el("div", { class: "panel" },
+    empty.length ? el("p", { class: "warn-note details-empty", text: `Issue details still empty: ${empty.map((f) => f.replace(/_/g, " ")).join(", ")}. Fill them on Plan → details.` }) : null,
+    !S.factsCurrent && !(S.app && S.app.facts === false) ? el("p", { class: "warn-note facts-stale", text: "Facts not checked since the last change: Check the facts, above." }) : null,
     el("div", { class: "row" }, ...DOWNLOADS.map((d) => el("button", { class: "ghost small", type: "button",
       "data-download": d.kind, disabled: !!busy, title: d.title,
       text: busy === d.kind ? "Making…" : d.text, onclick: () => download(d.kind) }))),
@@ -1763,6 +2244,97 @@ async function checkProof(which) {
     if (r.job) S.job = r.job;
     renderSide(); updateTabs();
   } catch (e) { toast(e.message, true); }
+}
+
+/* ── Check the facts (SPEC-FACTS) ─────────────────────────────────────────── */
+function factsPanel() {
+  if (S.app && S.app.facts === false)
+    return el("div", {}, el("h4", { text: "Facts" }), el("div", { class: "panel facts" },
+      el("p", { class: "hint", style: "margin:0", text: "The fact check looks things up on the web, so it is off in the demo. Installed, it checks every claim and link." })));
+  const fa = S.review.facts;
+  const checking = running() && S.job && S.job.kind === "facts";
+  const box = el("div", { class: "panel facts" });
+  if (checking) {
+    box.append(el("p", { class: "proof-busy", text: "Checking the facts: listing the claims, looking them up, opening the links…" }),
+      el("button", { class: "ghost danger small", type: "button", text: "Stop", onclick: stop }));
+  } else if (fa) {
+    const items = fa.items || [], links = fa.links || [];
+    const wrong = items.filter((i) => i.result === "wrong"), unclear = items.filter((i) => i.result === "unclear");
+    const ok = items.filter((i) => i.result === "confirmed");
+    const badLinks = links.filter((l) => l.result === "wrong page" || l.result === "broken");
+    box.append(el("p", { class: "hint", style: "margin:0 0 8px", text:
+      `${wrong.length} wrong · ${badLinks.length} link${badLinks.length === 1 ? "" : "s"} to fix · ${unclear.length} couldn't check · ${ok.length} confirmed`
+      + (items.length >= 20 ? " · it looks at the 20 claims most likely to be wrong; read the rest yourself" : "")
+      + (S.factsCurrent ? "" : " · the text has changed since: check again") }));
+    const src = (it) => it.source ? el("a", { href: it.source.url, target: "_blank", rel: "noopener noreferrer", text: it.source.title || it.source.url }) : null;
+    for (const it of wrong) {
+      box.append(el("div", { class: "fact-row wrong", "data-fact": it.id },
+        el("p", { class: "fact-quote", text: "“" + it.quote + "”" }),
+        el("p", { class: "fact-note" }, it.note || "", " ", src(it)),
+        it.fix ? el("button", { class: "ghost small", type: "button", disabled: running(), "aria-pressed": String(!!it.applied),
+          text: it.applied ? "Undo the fix" : "Use this fix: “" + it.fix.after + "”", onclick: () => toggleFact(it) })
+          : el("p", { class: "muted", text: "fix it by hand: the words could not be placed safely" })));
+    }
+    for (const l of badLinks) {
+      box.append(el("div", { class: "fact-row wrong link" },
+        el("p", { class: "fact-quote" }, "Link on “" + l.words + "”: ", el("a", { href: l.url, target: "_blank", rel: "noopener noreferrer", text: l.url })),
+        el("p", { class: "fact-note", text: `${l.result}${l.note ? " · " + l.note : ""}` })));
+    }
+    for (const it of unclear) {
+      box.append(el("div", { class: "fact-row unclear" }, el("p", { class: "fact-quote", text: "“" + it.quote + "”" }),
+        el("p", { class: "fact-note" }, "couldn't check · " + (it.note || "") + " ", src(it))));
+    }
+    const goodLinks = links.filter((l) => !(l.result === "wrong page" || l.result === "broken"));
+    if (goodLinks.length) box.append(el("details", { class: "fact-ok" },
+      el("summary", { text: `${goodLinks.filter((l) => l.result === "fits").length} link(s) fit · ${goodLinks.filter((l) => l.result !== "fits").length} not checked` }),
+      ...goodLinks.map((l) => el("div", { class: "fact-row " + (l.result === "fits" ? "ok" : "unclear") },
+        el("p", { class: "fact-quote" }, "“" + l.words + "”: ", el("a", { href: l.url, target: "_blank", rel: "noopener noreferrer", text: l.url })),
+        el("p", { class: "fact-note", text: `${l.result}${l.note ? " · " + l.note : ""}` })))));
+    if (ok.length) box.append(el("details", { class: "fact-ok" }, el("summary", { text: `${ok.length} confirmed` }),
+      ...ok.map((it) => el("div", { class: "fact-row ok" }, el("p", { class: "fact-quote", text: "“" + it.quote + "”" }),
+        el("p", { class: "fact-note" }, it.note || "", " ", src(it))))));
+  }
+  box.append(el("div", { class: "row" },
+    el("button", { class: fa ? "ghost small" : "send", type: "button", disabled: running() || checking,
+      text: fa ? "Check the facts again" : "Check the facts",
+      title: "every claim and every link, your words and the drafts alike, looked up on the web", onclick: checkFacts })));
+  if (!fa && !checking) box.append(el("p", { class: "hint", text: "lists the claims, looks them up, opens every link; nothing changes unless you click a fix" }));
+  return el("div", {}, el("h4", { text: "Facts" }), box);
+}
+async function checkFacts() {
+  const slug = S.slug;
+  if (!(await flush())) { toast("Save the issue first: the problem is shown at the top.", true); return; }
+  try {
+    const r = await api(`/api/issues/${encodeURIComponent(slug)}/facts`, { method: "POST", body: {} });
+    if (slug !== S.slug) return;
+    if (r.job) S.job = r.job;
+    renderSide(); updateTabs();
+  } catch (e) { toast(e.message, true); }
+}
+async function toggleFact(it) {
+  if (running() || S.fixBusy) return;
+  S.fixBusy = true;
+  try {
+    const r = await api(`/api/issues/${encodeURIComponent(S.slug)}/facts/${encodeURIComponent(it.id)}`,
+      { method: "POST", body: { applied: !it.applied } });
+    await reloadDoc({ keepFrame: true });
+    toast(r.item.applied ? "Corrected." : "Your words are back.");
+  } catch (e) {
+    toast(e.message, true);
+    await reloadDoc({ keepFrame: true });
+  } finally { S.fixBusy = false; }
+}
+function highlightFacts() {
+  const d = frameDoc();
+  const fa = S.review && S.review.facts;
+  if (!d || !fa || !S.factsCurrent) return;
+  const body = d.getElementById("issue-body");
+  for (const it of fa.items || []) {
+    if (it.result !== "wrong" || it.applied) continue;
+    for (const part of body.querySelectorAll(`[data-block="${CSS.escape(it.block)}"]`)) {
+      if (markText(part, it.quote, "fact", 0, "", "", "fact check: " + (it.note || "wrong")) === true) break;
+    }
+  }
 }
 
 async function toggleFix(f) {

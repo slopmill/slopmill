@@ -10,6 +10,7 @@ Rules the code enforces, whatever the model returns:
     The figure around it is built here, not by the model, and validated like any draft.
   - The model is called through an injectable provider, so tests never reach a real one.
 """
+import hashlib
 import json
 import os
 import re
@@ -56,9 +57,23 @@ Answer in exactly this format and nothing else:
 === END ===
 (one for each block you were asked for, in document order)
 === NOTE ===
-One to three plain sentences for the author: what you wrote, and anything you were unsure of.
+One to three plain sentences for the author: what you wrote, and anything you were unsure of
+or could not find. A sentence about one block starts its own line with that block's id and a
+colon, like: #b-xxxx: I found no page for the launch date, so it is left out.
 === END ===
 """.strip()
+
+BACKGROUND_RULES = """
+Background:
+DOCUMENT.md begins with the author's BACKGROUND notes for this issue: facts, numbers, links
+and thoughts they collected. They are not part of the issue. Facts, numbers and links stated
+plainly in them are the author's own and may be used like the author's text. Anything the
+notes mark as unsure (a question, "check", "?", "maybe", "TODO") is a lead, not a fact: do
+not state it as true unless SOURCES.md confirms it. Use whatever fits each block; do not copy
+the notes in wholesale.
+""".strip()
+
+BACKGROUND_MAX = 40 * 1024   # bytes; the box refuses more
 
 PICTURE_RULES = """
 Pictures:
@@ -163,12 +178,15 @@ def drawn_from(b, images_dir):
     return None
 
 
-def document_for_model(meta, blocks, images_dir=None):
+def document_for_model(meta, blocks, images_dir=None, background=""):
     head = []
     for k in ("title", "subject", "number"):
         if meta.get(k) not in (None, ""):
             head.append(f"{k.upper()}: {meta[k]}")
     parts = ["\n".join(head)] if head else []
+    if (background or "").strip():
+        parts.append("[BACKGROUND: the author's notes for this issue, not part of it]\n"
+                     + background.strip() + "\n[END OF BACKGROUND]")
     for b in blocks:
         if b.type == "comment":
             continue
@@ -201,6 +219,20 @@ def parse_reply(text):
     blocks = {m.group(1): m.group(2) for m in BLOCK_RE.finditer(text or "")}
     note = NOTE_RE.search(text or "")
     return blocks, (note.group(1).strip() if note else "")
+
+
+NOTE_LINE_RE = re.compile(r"^\s*(?:[-*\u2022]\s*)?#?([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(\S.*)$")
+
+
+def split_note(note, ids):
+    """The NOTE's lines that start with one of `ids` ("#b-xxxx: ..."), as {id: text}, so
+    each can be shown on the block it is about."""
+    out = {}
+    for line in (note or "").split("\n"):
+        m = NOTE_LINE_RE.match(line)
+        if m and m.group(1) in ids:
+            out[m.group(1)] = (out.get(m.group(1), "") + " " + m.group(2).strip()).strip()
+    return out
 
 
 def parse_images(text):
@@ -318,9 +350,11 @@ def figure_markdown(pack, fname, alt, caption):
 
 # ── the passes ───────────────────────────────────────────────────────────────────
 
-def _system(pack, voice, images):
+def _system(pack, voice, images, background=""):
     voice_system, files = voice.voice() if voice is not None else pack.voice()
     rules = ENGINE_RULES.format(vocabulary=vocabulary(pack))
+    if (background or "").strip():
+        rules += "\n\n" + BACKGROUND_RULES
     if images is not None and pack.figure_component():
         rules += "\n\n" + PICTURE_RULES
     if pack.figure_component():
@@ -328,30 +362,30 @@ def _system(pack, voice, images):
     return (voice_system.strip() + "\n\n" + rules).strip(), files
 
 
-def request_size(llm, pack, voice, images, meta, blocks, ask, images_dir=None):
-    system, files = _system(pack, voice, images)
+def request_size(llm, pack, voice, images, meta, blocks, ask, images_dir=None, background=""):
+    system, files = _system(pack, voice, images, background)
     return (len(system.encode()) + len(ask.encode())
             + sum(os.path.getsize(p) + FRAMING for _, p in files)
-            + len(document_for_model(meta, blocks, images_dir).encode()) + FRAMING)
+            + len(document_for_model(meta, blocks, images_dir, background).encode()) + FRAMING)
 
 
 def _call(llm, pack, voice, images, meta, blocks, ask, workdir, cancel, log, on_usage, images_dir,
-          extra_files=(), extra_rules=""):
-    system, voice_files = _system(pack, voice, images)
+          extra_files=(), extra_rules="", background=""):
+    system, voice_files = _system(pack, voice, images, background)
     if extra_rules:
         system += "\n\n" + extra_rules
-    tmp, docfile = _write_document(workdir, meta, blocks, images_dir)
+    tmp, docfile = _write_document(workdir, meta, blocks, images_dir, background)
     files = [p for _, p in voice_files] + [docfile] + [p for p in extra_files if p]
     return _send(llm, system, ask, files, tmp, cancel, log, on_usage,
                  f"voice pack: {len(voice_files)} files")
 
 
-def _write_document(workdir, meta, blocks, images_dir):
+def _write_document(workdir, meta, blocks, images_dir, background=""):
     os.makedirs(workdir, exist_ok=True)
     tmp = tempfile.mkdtemp(dir=workdir, prefix="run-")
     docfile = os.path.join(tmp, "DOCUMENT.md")
     with open(docfile, "w", encoding="utf-8") as f:
-        f.write(document_for_model(meta, blocks, images_dir))
+        f.write(document_for_model(meta, blocks, images_dir, background))
     return tmp, docfile
 
 
@@ -363,7 +397,7 @@ def _send(llm, system, ask, files, tmp, cancel, log, on_usage, what):
     log("info", f"{what}; request {size // 1024}KB of {limit // 1024}KB")
     if size > limit:
         raise LLMError(f"the request is {size // 1024}KB and this model takes at most "
-                       f"{limit // 1024}KB: turn off some voice files or shorten the issue")
+                       f"{limit // 1024}KB: shorten the Background notes, turn off some voice files or shorten the issue")
     chars = len(system) + len(ask)
     for p in files:
         with open(p, encoding="utf-8", errors="replace") as f:
@@ -385,7 +419,8 @@ def _send(llm, system, ask, files, tmp, cancel, log, on_usage, what):
     return str(reply)
 
 
-def _research(llm, items, searcher, room, meta, blocks, workdir, cancel, log, on_usage, images_dir):
+def _research(llm, items, searcher, room, meta, blocks, workdir, cancel, log, on_usage, images_dir,
+              background=""):
     """Look things up for items ({id: the request's words}) before the writing call.
     Returns (sources, path of SOURCES.md or None). room: bytes the writing call can still
     take. Nothing here fails the pass: without sources the writer is told nothing was found."""
@@ -399,7 +434,7 @@ def _research(llm, items, searcher, room, meta, blocks, workdir, cancel, log, on
         log("warn", f"no room left in the request for research ({max(room, 0) // 1024}KB): "
                     f"turn off some voice files to make room")
         return [], None, "failed"
-    tmp, docfile = _write_document(workdir, meta, blocks, images_dir)
+    tmp, docfile = _write_document(workdir, meta, blocks, images_dir, background)
     if getattr(searcher, "native", False):
         return _native_research(searcher, items, room, docfile, tmp, cancel, log, on_usage)
     log("info", f"researching {', '.join('#' + i for i in items)}: asking the writer what to search for")
@@ -461,9 +496,9 @@ def _native_research(searcher, items, room, docfile, tmp, cancel, log, on_usage)
     return sources, path, "found"
 
 
-def _room(llm, pack, voice, images, meta, blocks, ask, images_dir):
+def _room(llm, pack, voice, images, meta, blocks, ask, images_dir, background=""):
     limit = getattr(llm, "max_request_bytes", MAX_PAYLOAD)
-    return limit - request_size(llm, pack, voice, images, meta, blocks, ask, images_dir) \
+    return limit - request_size(llm, pack, voice, images, meta, blocks, ask, images_dir, background) \
         - len(research.USE_SOURCES.encode()) - 2 * FRAMING
 
 
@@ -588,8 +623,9 @@ def _draw_chart(pack, target_id, raw, images_dir, log, block_event, created, sou
 def generate(pack, meta, blocks, targets, llm, *, workdir, direction="", cancel=None,
              log=lambda level, text: None, block_event=lambda bid, status, detail="": None,
              voice=None, images=None, images_dir=None, on_usage=lambda u: None, created=None,
-             image_dirs=None, searcher=None):
+             image_dirs=None, searcher=None, background="", notes=None):
     """Write a draft for each prompt in targets. Returns (new blocks, note, failures).
+    notes: {prompt id: the author's direction for rewriting its existing draft}.
     New pictures are drawn into images_dir; notes of earlier ones are looked up in
     image_dirs (default: images_dir alone).
 
@@ -625,17 +661,26 @@ def generate(pack, meta, blocks, targets, llm, *, workdir, direction="", cancel=
     graphs = [p.id for p in prompts if is_chart_prompt(p.text)]
     if graphs:
         ask += f"\nThese are CHART prompts: answer each with a CHART block: {', '.join('#' + i for i in graphs)}."
+    live = {p.id for p in prompts}
+    notes = {k: " ".join(str(v).split()) for k, v in (notes or {}).items() if k in live and str(v).strip()}
+    if notes:
+        ask += ("\n\nThe author's directions for this rewrite. Each of these prompts already has a "
+                "DRAFT in DOCUMENT.md: start from that draft, change what the direction asks, and "
+                "keep the rest.\n" + "\n".join(f"#{k}: {v}" for k, v in notes.items()))
     if direction.strip():
         ask += f"\n\nGeneral direction from the author:\n{direction.strip()}"
     for p in prompts:
         block_event(p.id, "writing")
-    wanted = {p.id: p.text for p in prompts
-              if research.wants_research(p.text, chart=is_chart_prompt(p.text))}
+    # Research is on for every prompt unless its switch is off (SPEC-BASICS A).
+    wanted = {p.id: p.text + (f"\nThe author's direction for this rewrite: {notes[p.id]}" if p.id in notes else "")
+              for p in prompts
+              if research.draft_wants_research(p, chart=is_chart_prompt(p.text),
+                                               picture=is_picture_prompt(p.text))}
     sources, found, status = [], None, "off"
     if wanted and searcher is not None:
-        room = _room(llm, pack, voice, images, meta, blocks, ask, image_dirs or images_dir)
+        room = _room(llm, pack, voice, images, meta, blocks, ask, image_dirs or images_dir, background)
         sources, found, status = _research(llm, wanted, searcher, room, meta, blocks, workdir, cancel,
-                                           log, on_usage, image_dirs or images_dir)
+                                           log, on_usage, image_dirs or images_dir, background)
     if found:
         ask += (f"\n\nRESEARCHED: {', '.join('#' + i for i in wanted if any(i in s['for'] for s in sources))}."
                 f" SOURCES.md holds what was found for them.")
@@ -643,7 +688,7 @@ def generate(pack, meta, blocks, targets, llm, *, workdir, direction="", cancel=
     ask += research.not_researched(list(wanted)[research.MAX_ITEMS:] if searcher is not None else [])
     reply = _call(llm, pack, voice, images, meta, blocks, ask, workdir, cancel, log, on_usage,
                   image_dirs or images_dir, extra_files=[found] if found else (),
-                  extra_rules=research.USE_SOURCES if found else "")
+                  extra_rules=research.USE_SOURCES if found else "", background=background)
     got, note = parse_reply(reply)
     pictures = parse_images(reply)
     graphs = charts.parse_charts(reply)
@@ -707,6 +752,184 @@ def generate(pack, meta, blocks, targets, llm, *, workdir, direction="", cancel=
     return new_blocks, note, failures
 
 
+# ── title suggestions (SPEC-BASICS L) ─────────────────────────────────────────────
+
+TITLES_RULES = """
+How this job works:
+The attached DOCUMENT.md is the issue as it stands (its TITLE line, if any, is a working
+title). Suggest titles for it, drawn from what it is actually about, in the author's own
+way of titling things (the attached samples show it).
+
+Answer with six titles, one per line, and nothing else: no numbers, no quote marks, no
+explanations.
+""".strip()
+
+
+def suggest_titles(pack, meta, blocks, llm, *, workdir, voice=None, on_usage=lambda u: None,
+                   image_dirs=None, background="", cancel=None, log=lambda level, text: None):
+    """Up to six title suggestions for the issue, cleaned and without repeats."""
+    voice_system, files = voice.voice() if voice is not None else pack.voice()
+    system = (voice_system.strip() + "\n\n" + TITLES_RULES).strip()
+    if (background or "").strip():
+        system += "\n\n" + BACKGROUND_RULES
+    tmp, docfile = _write_document(workdir, meta, blocks, image_dirs, background)
+    reply = _send(llm, system, "Suggest titles for this issue.", [p for _, p in files] + [docfile],
+                  tmp, cancel, log, on_usage, "suggesting titles")
+    out = []
+    for line in str(reply).splitlines():
+        quotes = "\"'\u201c\u201d\u2018\u2019*_"
+        t = re.sub(r"\*\*|__", "", line).strip().strip(quotes)   # bold and quotes first: "1. X"
+        t = re.sub(r"^\s*(?:\d+\s*[.):-]|[-+*\u2022])\s*", "", t)
+        t = t.strip().strip(quotes).strip()
+        if not t or t.startswith("===") or len(t) > 120:
+            continue
+        if t.endswith(":") or re.match(r"(?i)^(here are|here's|sure|some|titles?)\b.*\b(titles?|ideas|options)\b", t):
+            continue                                         # a preface, not a title
+        if t.lower() not in {x.lower() for x in out}:
+            out.append(t)
+    return out[:6]
+
+
+# ── section headings, when the design asks for them (SPEC-HEADINGS) ──────────────────
+
+HEADINGS_RULES = """
+How this job works:
+The attached DOCUMENT.md is the issue as it stands, block by block, in order: [PROSE #id] is
+the author's own words (one that starts with # is a heading), [DRAFT #id for #prompt] is text
+written from a prompt, [COMPONENT #id] is a box or a picture, [PROMPT #id] is an instruction.
+
+Your only job: find the sections that have no heading, and write one for each. Change nothing
+else, and do not rewrite any text. A new section starts where the subject changes.
+
+This design's headings:
+{describe}
+
+Answer in exactly this format and nothing else:
+=== HEADING before <id> ===
+the heading: one line, plain words, no # or other marks
+=== END ===
+(one for each missing heading; <id> is the block the section starts with), or, when every
+section already has one:
+=== NONE ===
+Then:
+=== NOTE ===
+One plain sentence for the author about what you added.
+=== END ===
+""".strip()
+
+HEADING_RE = re.compile(r"^=== HEADING before #?([A-Za-z][A-Za-z0-9_-]*) ===[ \t]*\n(.*?)\n=== END ===",
+                        re.S | re.M)
+MAX_NEW_HEADINGS = 10
+
+
+def is_heading(b):
+    return b.type == "prose" and bool(re.match(r"^#{1,6}\s", b.text or ""))
+
+
+FENCED_RE = re.compile(r"^(:{3,})[^\n]*\n.*?^\1[ \t]*$", re.S | re.M)
+
+
+def _counts_as_text(b):
+    """Your paragraphs and the drafts; not headings."""
+    return (b.type == "prose" and not is_heading(b)) or b.type == "draft"
+
+
+def _words(b):
+    """Words of running text: a box or picture inside a draft (::: … :::) counts nothing,
+    the draft's own paragraphs around it do."""
+    return len(FENCED_RE.sub(" ", b.text or "").split())
+
+
+HEADINGS_AGAIN_WORDS = 50    # words of change before a checked issue is asked about again
+
+
+def headings_seen(blocks):
+    """What a headings pass looked at: which text blocks, and how many words in all."""
+    return {"ids": sorted(b.id for b in blocks if _counts_as_text(b) and b.id),
+            "words": sum(_words(b) for b in blocks if _counts_as_text(b))}
+
+
+def changed_since(seen, blocks):
+    """New text blocks, or enough words changed, since the pass that saw `seen`. A typo fix
+    does not ask the writer again; a new paragraph or section does."""
+    if not isinstance(seen, dict):
+        return True
+    now = headings_seen(blocks)
+    return bool(set(now["ids"]) - set(seen.get("ids", []))) or \
+        abs(now["words"] - int(seen.get("words", 0))) >= HEADINGS_AGAIN_WORDS
+
+
+def headings_needed(pack, blocks):
+    """A run of text longer than the design's after_words with no heading in it."""
+    h = pack.headings
+    if not h:
+        return False
+    run = 0
+    for b in blocks:
+        if is_heading(b) or (b.type == "component" and b.attrs.get("class") in h.not_before):
+            run = 0
+        elif _counts_as_text(b):
+            run += _words(b)
+            if run > h.after_words:
+                return True
+    return False
+
+
+def add_headings(pack, meta, blocks, llm, *, workdir, cancel=None, log=lambda level, text: None,
+                 voice=None, on_usage=lambda u: None, image_dirs=None, background=""):
+    """Ask the writer for the missing section headings and put the good ones in.
+    Returns (new blocks, the headings added, the writer's note, why each other one was dropped)."""
+    h = pack.headings
+    voice_system, files = voice.voice() if voice is not None else pack.voice()
+    system = (voice_system.strip() + "\n\n" + HEADINGS_RULES.format(
+        describe=h.describe or "Short, plain headings.")).strip()
+    if (background or "").strip():
+        system += "\n\n" + BACKGROUND_RULES
+    tmp, docfile = _write_document(workdir, meta, blocks, image_dirs, background)
+    reply = _send(llm, system, "Add the missing section headings.", [p for _, p in files] + [docfile],
+                  tmp, cancel, log, on_usage, "section headings")
+    _, note = parse_reply(reply)
+    by_id = {b.id: b for b in blocks if b.id}
+    prompts = {b.id: b for b in blocks if b.type == "prompt"}
+    taken = {b.id for b in blocks if b.id}
+    out, added, dropped, placed = list(blocks), [], [], set()
+    for m in HEADING_RE.finditer(str(reply)):
+        target, raw = m.group(1), m.group(2).strip()
+        words = re.sub(r"[#*_`\[\]]", "", " ".join(raw.split())).strip()
+        if "\n" in raw:
+            dropped.append(f"#{target}: a heading must be one line")
+            continue
+        b = by_id.get(target)
+        if len(added) >= MAX_NEW_HEADINGS:
+            dropped.append(f"#{target}: more than {MAX_NEW_HEADINGS} headings in one pass")
+            continue
+        if not 1 <= len(words) <= 80:
+            dropped.append(f"#{target}: a heading must be one line of 1 to 80 characters")
+            continue
+        if b is None or b.type == "comment":
+            dropped.append(f"#{target}: there is no such block")
+            continue
+        if b.type == "draft" and b.attrs.get("for") in prompts:
+            b = prompts[b.attrs["for"]]          # a draft's section starts at its prompt
+        live = [x for x in out if x.type != "comment"]
+        at = next(i for i, x in enumerate(live) if x is b)
+        if at == 0:
+            dropped.append(f"#{target}: the top of the issue has no heading")
+        elif is_heading(b) or is_heading(live[at - 1]):
+            dropped.append(f"#{target}: it is next to a heading already")
+        elif b.type == "component" and b.attrs.get("class") in h.not_before:
+            dropped.append(f"#{target}: this design never puts a heading on its {b.attrs.get('class')} box")
+        elif b.id in placed:
+            dropped.append(f"#{target}: a second heading for the same place")
+        else:
+            new = doc.Block("prose", new_id(taken), "#" * h.level + " " + words, {})
+            taken.add(new.id)
+            out.insert(out.index(b), new)
+            placed.add(b.id)
+            added.append(words)
+    return out, added, note, dropped
+
+
 def _put_draft(blocks, prompt, md):
     h = doc.prompt_hash(prompt.text)
     out, placed = [], False
@@ -733,7 +956,7 @@ def new_id(taken):
 def revise(pack, meta, blocks, comments, general, llm, *, workdir, cancel=None,
            log=lambda level, text: None, block_event=lambda bid, status, detail="": None,
            voice=None, images=None, images_dir=None, on_usage=lambda u: None, created=None,
-           image_dirs=None, searcher=None):
+           image_dirs=None, searcher=None, background=""):
     """One pass over every queued comment.
     Returns (new blocks, proposals, note, failures, ids of blocks that got a valid answer).
 
@@ -787,9 +1010,9 @@ def revise(pack, meta, blocks, comments, general, llm, *, workdir, cancel=None,
         wanted["issue"] = general.strip()
     sources, found, status = [], None, "off"
     if wanted and searcher is not None:
-        room = _room(llm, pack, voice, images, meta, blocks, ask, image_dirs or images_dir)
+        room = _room(llm, pack, voice, images, meta, blocks, ask, image_dirs or images_dir, background)
         sources, found, status = _research(llm, wanted, searcher, room, meta, blocks, workdir, cancel,
-                                           log, on_usage, image_dirs or images_dir)
+                                           log, on_usage, image_dirs or images_dir, background)
     if found:
         ask += ("\nRESEARCHED: " + ", ".join("#" + i if i != "issue" else "the general direction"
                                              for i in wanted) + ". SOURCES.md holds what was found.")
@@ -797,7 +1020,7 @@ def revise(pack, meta, blocks, comments, general, llm, *, workdir, cancel=None,
     ask += research.not_researched(list(wanted)[research.MAX_ITEMS:] if searcher is not None else [])
     reply = _call(llm, pack, voice, images, meta, blocks, ask, workdir, cancel, log, on_usage,
                   image_dirs or images_dir, extra_files=[found] if found else (),
-                  extra_rules=research.USE_SOURCES if found else "")
+                  extra_rules=research.USE_SOURCES if found else "", background=background)
     got, note = parse_reply(reply)
     pictures = parse_images(reply)
     graphs = charts.parse_charts(reply)
@@ -937,12 +1160,14 @@ def parse_answer(text):
 
 def ask(pack, meta, blocks, question, history, llm, *, workdir, cancel=None,
         log=lambda level, text: None, voice=None, on_usage=lambda u: None, image_dirs=None,
-        searcher=None):
+        searcher=None, background=""):
     """Answer the author's chat message about the issue. Writes nothing to the issue.
     history: earlier chat entries ({role, text}), oldest first. Returns (answer, prompts,
     change, sources)."""
     voice_system, _ = voice.voice() if voice is not None else pack.voice()
     system = (voice_system.strip() + "\n\n" + ASK_RULES).strip()
+    if (background or "").strip():
+        system += "\n\n" + BACKGROUND_RULES
     lines = []
     for m in history[-12:]:
         who = {"user": "Author", "model": "You"}.get(m.get("role"))
@@ -955,16 +1180,17 @@ def ask(pack, meta, blocks, question, history, llm, *, workdir, cancel=None,
     sources, found = [], None
     if searcher is not None and research.wants_research(question):
         limit = getattr(llm, "max_request_bytes", MAX_PAYLOAD)
-        doc_bytes = len(document_for_model(meta, blocks, image_dirs).encode())
+        doc_bytes = len(document_for_model(meta, blocks, image_dirs, background).encode())
         room = limit - len(system.encode()) - len(prompt.encode()) - doc_bytes - 3 * FRAMING \
             - len(research.USE_SOURCES.encode())
         sources, found, status = _research(llm, {"question": question.strip()}, searcher, room, meta,
-                                           blocks, workdir, cancel, log, on_usage, image_dirs)
+                                           blocks, workdir, cancel, log, on_usage, image_dirs,
+                                           background)
         prompt += research.nothing_found({"question": 1}, status).replace("#question", "this question")
     if found:
         system += "\n\n" + research.USE_SOURCES.replace("the items marked RESEARCHED", "this question")
         prompt += "\n\n(SOURCES.md holds what slopmill found on the web for this question.)"
-    tmp, docfile = _write_document(workdir, meta, blocks, image_dirs)
+    tmp, docfile = _write_document(workdir, meta, blocks, image_dirs, background)
     reply = _send(llm, system, prompt, [docfile] + ([found] if found else []), tmp, cancel, log,
                   on_usage, "answering in the chat")
     answer, prompts, change = parse_answer(reply)

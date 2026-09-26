@@ -7,7 +7,7 @@ and every save is re-parsed and must come back as exactly the blocks that were s
 
 Block types:
   prose      the author's words: a paragraph, heading, list or quote, with a {#id} line
-  prompt     ::: {.prompt #id}   an instruction; never rendered, never consumed
+  prompt     ::: {.prompt #id [research=off]}   an instruction; never rendered, never consumed
   draft      ::: {.draft #id for=PROMPT prompt=HASH}   text a model wrote from a prompt
   component  any other fenced div (figure, callout...), kept as raw Markdown
   comment    an HTML comment between blocks; no ID, dropped from the output
@@ -125,7 +125,10 @@ def parse(text):
         classes = attr[1] if attr and block["t"] == "Div" else []
         kvs = {k: v for k, v in attr[2] if k != "data-pos"} if attr else {}
         if block["t"] == "Div" and classes[:1] == ["prompt"]:
-            blocks.append(Block("prompt", ident, _inner(chunk, "prompt", start), {}, start))
+            # research=off is the one setting a prompt carries: "do not look this up".
+            blocks.append(Block("prompt", ident, _inner(chunk, "prompt", start),
+                                {"research": "off"} if kvs.get("research") == "off" else {},
+                                start))
         elif block["t"] == "Div" and classes[:1] == ["draft"]:
             blocks.append(Block("draft", ident, _inner(chunk, "draft", start),
                                 {k: kvs[k] for k in ("for", "prompt") if k in kvs}, start))
@@ -187,7 +190,8 @@ def serialize(meta, blocks, field_order=(), front=None):
         if b.type == "prose":
             parts.append(f"{{#{b.id}}}\n{text}")
         elif b.type == "prompt":
-            parts.append(f"::: {{.prompt #{b.id}}}\n{text}\n:::")
+            off = " research=off" if b.attrs.get("research") == "off" else ""
+            parts.append(f"::: {{.prompt #{b.id}{off}}}\n{text}\n:::")
         elif b.type == "draft":
             extra = "".join(f" {k}={b.attrs[k]}" for k in ("for", "prompt") if b.attrs.get(k))
             parts.append(f"::: {{.draft #{b.id}{extra}}}\n{text}\n:::")

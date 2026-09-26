@@ -38,15 +38,57 @@ MAX_TEMPLATE_BYTES = 64_000
 # What a design file may contain. Anything else is refused rather than ignored, so a
 # shared file cannot carry a setting (a command, a path) that some later version reads.
 FILE_KEYS = {
-    "": {"format", "pack", "page", "meta", "inline", "accents", "blocks", "components", "templates"},
+    "": {"format", "pack", "page", "meta", "inline", "accents", "blocks", "components", "templates", "headings"},
     "pack": {"name", "asset_base", "read_url", "assets_dir"},
     "page": {"css", "site_head"},
     "meta": {"fields", "required", "types"},
     "blocks": {"paragraph", "quote", "list", "heading"},
+    "headings": {"add", "level", "after_words", "not_before", "describe"},
 }
-COMPONENT_KEYS = {"shape", "template", "attrs", "params", "paragraphs", "describe"}
+COMPONENT_KEYS = {"shape", "template", "attrs", "params", "paragraphs", "describe", "title"}
 # Free-form tables in a design file hold text only: names to strings.
 TEXT_TABLES = ("inline", "accents")
+
+
+@dataclass
+class Headings:
+    """[headings]: the design asks for every section to have a heading, and slopmill adds the
+    missing ones on the way to Proof (SPEC-HEADINGS). None when a design does not ask."""
+    level: int = 2
+    after_words: int = 300
+    not_before: tuple = ()
+    describe: str = ""
+
+
+def _headings(cfg, path, heading_levels, component_names):
+    h = cfg.get("headings")
+    if h is None:
+        return None
+    if not isinstance(h, dict):
+        raise EnvironmentProblem(f"{path}: [headings] must be a table")
+    extra = sorted(set(h) - FILE_KEYS["headings"])
+    if extra:
+        raise EnvironmentProblem(f"{path}: [headings] does not take {', '.join(extra)}")
+    add = h.get("add", False)
+    if not isinstance(add, bool):
+        raise EnvironmentProblem(f"{path}: headings.add must be true or false")
+    level, words = h.get("level", 2), h.get("after_words", 300)
+    if isinstance(level, bool) or not isinstance(level, int) or not 2 <= level <= 6:
+        raise EnvironmentProblem(f"{path}: headings.level must be a whole number 2 to 6")
+    if level not in heading_levels:
+        raise EnvironmentProblem(f"{path}: headings.level {level} is not drawn by [blocks.heading]")
+    if isinstance(words, bool) or not isinstance(words, int) or not 50 <= words <= 2000:
+        raise EnvironmentProblem(f"{path}: headings.after_words must be a whole number 50 to 2000")
+    nb = h.get("not_before", [])
+    if not isinstance(nb, list) or not all(isinstance(x, str) for x in nb):
+        raise EnvironmentProblem(f"{path}: headings.not_before must be a list of component names")
+    unknown = [x for x in nb if x not in component_names]
+    if unknown:
+        raise EnvironmentProblem(f"{path}: headings.not_before names no component of this design: {unknown}")
+    describe = h.get("describe", "")
+    if not isinstance(describe, str) or len(describe) > 1500:
+        raise EnvironmentProblem(f"{path}: headings.describe must be text, at most 1,500 characters")
+    return Headings(level, words, tuple(nb), describe.strip()) if add else None
 
 
 @dataclass
@@ -59,6 +101,11 @@ class Component:
     min_paragraphs: int
     max_paragraphs: int
     describe: str = None   # offered to the writing model when set
+    title: str = None      # what the editor's "+ Box" menu calls it (default: its name)
+
+    @property
+    def label(self):
+        return self.title or self.name.replace("-", " ").replace("_", " ").capitalize()
 
 
 class Pack:
@@ -102,7 +149,9 @@ class Pack:
                 self.components[name] = Component(
                     name=name, shape=c["shape"], template=c["template"],
                     attrs=dict(c.get("attrs", {})), params=dict(c.get("params", {})),
-                    min_paragraphs=lo, max_paragraphs=hi, describe=c.get("describe"))
+                    min_paragraphs=lo, max_paragraphs=hi, describe=c.get("describe"),
+                    title=c.get("title"))
+            self.headings = _headings(cfg, path, set(self.heading_templates), set(self.components))
             v = cfg.get("voice", {})
             # The old place a folder design listed its voice files. Only read now to seed a
             # voice pack the first time (see voices.py); a design file cannot have one.
@@ -287,6 +336,8 @@ def design_from_text(data, origin="design file", trusted=False):
         extra = sorted(set(c) - COMPONENT_KEYS)
         if extra:
             raise EnvironmentProblem(f"{origin}: [components.{cname}] does not take {', '.join(extra)}")
+        if "title" in c and (not isinstance(c["title"], str) or not 0 < len(c["title"]) <= 60):
+            raise EnvironmentProblem(f"{origin}: components.{cname}.title must be text, at most 60 characters")
         for sub in ("attrs", "params"):
             if not _text_table(c.get(sub, {})):
                 raise EnvironmentProblem(f"{origin}: components.{cname}.{sub} must map names to text")
@@ -326,7 +377,7 @@ def export_design(pack):
     out = {"format": DESIGN_FORMAT,
            "pack": {k: cfg["pack"][k] for k in ("name", "asset_base", "read_url", "assets_dir")
                     if k in cfg["pack"]}}
-    for key in ("meta", "inline", "accents", "blocks", "components"):
+    for key in ("meta", "inline", "accents", "blocks", "components", "headings"):
         if key in cfg:
             out[key] = cfg[key]
     out["page"] = {"css": pack.page_css, "site_head": pack.site_head}

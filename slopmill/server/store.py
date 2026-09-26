@@ -3,7 +3,8 @@
 
     issues/<slug>/issue.md       the document (the only source of truth for its text)
     issues/<slug>/settings.json  which design draws it and which voice writes it
-    issues/<slug>/review.json    comments, proposals and the chat log
+    issues/<slug>/review.json    comments, proposals, the chat log and the writer's notes
+    issues/<slug>/background.md  the author's notes for the writer: never printed or built
     issues/<slug>/history/       issue.md as it was before each model pass (for undo)
     issues/<slug>/images/        local images
     issues/<slug>/.runs/         what was sent to the model, and what came back
@@ -123,6 +124,7 @@ class Issue:
             data = json.load(f)
         for k in ("comments", "proposals", "chat"):
             data.setdefault(k, [])
+        data.setdefault("notes", {})
         return data
 
     def save_review(self, data):
@@ -134,6 +136,26 @@ class Issue:
             result = fn(data)
             self.save_review(data)
             return result
+
+    def background(self):
+        """The author's Background notes for this issue ("" when there are none)."""
+        try:
+            with open(os.path.join(self.dir, "background.md"), encoding="utf-8") as f:
+                return f.read()
+        except FileNotFoundError:
+            return ""
+
+    def save_background(self, text):
+        atomic_write(os.path.join(self.dir, "background.md"), text)
+
+    def set_notes(self, written, notes):
+        """The writer's notes after a pass: every block in `written` loses its old note,
+        then the new ones are put in. {block id: text}."""
+        def fn(d):
+            for b in written:
+                d["notes"].pop(b, None)
+            d["notes"].update({k: v for k, v in notes.items() if v})
+        self.update_review(fn)
 
     def chat(self, role, text, **extra):
         entry = {"id": uuid.uuid4().hex[:10], "role": role, "text": text, "ts": time.time(), **extra}

@@ -104,11 +104,21 @@ language = "en-US"
 
 ## Research
 
-Say "research", "look up", "find out" or "latest numbers" in a prompt, a comment or a chat
-question, or write a `Chart:` prompt, and slopmill looks things up before the writer
-answers. What was found goes to the writer as numbered sources; a chart prints the sites it
-used under it, and Draft links to them. Nothing found means the writer is told so, and a
-chart made from its memory says "not checked" on it.
+Every prompt looks things up before its draft is written: the writer picks a few web
+searches (or none, when your words already hold what it needs), slopmill reads the pages, and
+what was found goes to the writer as numbered sources it links to. A prompt's "Looks it up"
+switch on Plan turns this off for that prompt. Comments and chat questions look things up
+when they say "research", "look up", "find out" or "latest numbers". A chart prints the
+sites it used under it, and Draft links to them. Nothing found means the writer is told so,
+and a chart made from its memory says "not checked" on it.
+
+**What leaves your computer:** the search words (a few short queries the writer makes up,
+told never to include private names or unpublished figures), and requests for the pages it
+reads. Not your text. To keep even that at home, switch it off per prompt, or for everything
+with `provider = "off"`.
+
+Your Background notes (the box at the top of Plan) go to the writer with every prompt, so
+facts you already have need no search at all.
 
 ```toml
 [research]
@@ -121,7 +131,10 @@ provider = "auto"      # the default
   Otherwise, DuckDuckGo.
 - **duckduckgo**: the writer suggests a few searches; slopmill searches DuckDuckGo (no key,
   no account) and reads the top pages itself, public https addresses only. DuckDuckGo
-  slows down anyone who searches a lot, so a busy afternoon can come back with nothing.
+  slows down anyone who searches a lot; when it refuses, the same search goes through
+  [Jina's reader](https://jina.ai/reader/) (`r.jina.ai`), which asks DuckDuckGo from Jina's
+  address instead of yours. `jina = false` in `[research]` turns that off, and a refused
+  search then comes back with nothing.
 - **command**: your own search program: `command = "my-search --json {query}"`, printing
   `[{"title", "url", "snippet"}]`.
 - **off**: never searches. Search words go to a search engine only when research runs.

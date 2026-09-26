@@ -51,6 +51,7 @@ shape = "figure"
 template = "figure.html"
 
 [components.note]
+title = "Small note"
 shape = "container"
 template = "note.html"
 attrs = { label = "optional" }
@@ -59,6 +60,7 @@ params = { word = "A Small Note" }
 describe = 'a boxed aside: ::: {.note label="Short Title"} one or two short paragraphs :::'
 
 [components.poem]
+title = "Poem"
 shape = "container"
 template = "poem.html"
 attrs = { label = "optional" }
@@ -66,6 +68,7 @@ paragraphs = [1, 16]
 describe = 'a short poem, one line per paragraph: ::: {.poem label="Title"} lines, each as its own paragraph :::'
 
 [components.closing]
+title = "Closing line"
 shape = "container"
 template = "closing.html"
 paragraphs = [1, 3]

@@ -234,3 +234,23 @@ def test_the_old_prompt_elsewhere_in_the_issue_does_not_count(tmp_path):
     w = demo.DemoWriter({"b-a": "The old answer."}, delay=0, prompts={"b-a": "Write about bees."})
     doc.write_text("[PROMPT #b-a]\nWrite about rain.\n\n[PROMPT #b-b]\nWrite about bees.\n")
     assert "The old answer." not in str(w("s", "Write these blocks: #b-a.", [str(doc)]))
+
+
+def test_new_buttons_in_the_demo_say_what_they_are(site):
+    """Suggest titles gets stand-ins that say so; the fact check, which opens links and
+    searches the web, is off (the demo never reaches out on a visitor's behalf)."""
+    build, _ = site
+    app = build()
+
+    async def go():
+        async with client(app) as c:
+            await start(c)
+            state = (await c.get("/api/state", headers=H)).json()
+            assert state["facts"] is False
+            r = await c.post("/api/issues/001-welcome/facts", json={}, headers=H)
+            assert r.status_code == 403 and "off in the demo" in r.json()["error"]
+            r = await c.post("/api/issues/001-welcome/titles", json={}, headers=H)
+            assert r.status_code == 200, r.text
+            titles = r.json()["titles"]
+            assert titles == demo.DemoWriter.TITLES and "stand-in" in titles[0]
+    run(go())

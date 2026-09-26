@@ -263,6 +263,26 @@ def cmd_demo(args):
     return 0
 
 
+def cmd_trial(args):
+    """The hosted trial (see slopmill/trial.py and SPEC-TRIAL.md): a real writer, for a newsletter's
+    readers, for a week or a budget."""
+    import uvicorn
+
+    from .trial import build, make_template
+    if args.make_template:
+        make_template(args.make_template)
+        print(f"✓ a trial workspace template: {args.make_template}")
+        return 0
+    if not args.config:
+        print("✗ slopmill trial needs --config trial.toml", file=sys.stderr)
+        return 2
+    app, ledger = build(args.config, args.root, args.template)
+    print(f"slopmill trial on {args.host}:{args.port} · ${ledger.left():.2f} of ${ledger.budget:.2f} left",
+          flush=True)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning", proxy_headers=False)
+    return 0
+
+
 def cmd_setup(args):
     from .setup import run
     return run(args)
@@ -347,6 +367,15 @@ def main(argv=None):
     dm.add_argument("--idle", type=int, default=1800, help="seconds before an idle session is removed")
     dm.add_argument("--per-ip", type=int, default=20, help="new sessions an hour from one address")
     dm.set_defaults(fn=cmd_demo)
+
+    tr = sub.add_parser("trial", help="the hosted trial: a real writer, for a week or a budget (SPEC-TRIAL.md)")
+    tr.add_argument("--config", help="trial.toml: the invite, the end, the budget, the model and its prices")
+    tr.add_argument("--template", help="the workspace every visitor starts from (see --make-template)")
+    tr.add_argument("--make-template", metavar="DIR", help="make that workspace and stop")
+    tr.add_argument("--root", default="/tmp/slopmill-trial", help="where visitors' copies live (wiped at start)")
+    tr.add_argument("--host", default="127.0.0.1")
+    tr.add_argument("--port", type=int, default=8096)
+    tr.set_defaults(fn=cmd_trial)
 
     s = sub.add_parser("serve", help="run the editor (all the options; most people want start)")
     s.add_argument("--workspace", default="workspace", help="folder holding issues/")

@@ -52,6 +52,7 @@ shape = "figure"
 template = "figure.html"
 
 [components.note]
+title = "Note"
 shape = "container"
 template = "callout.html"
 attrs = { label = "optional" }
@@ -60,6 +61,7 @@ params = { border = "#1d5fd1", background = "#eef3fc", text = "#1f2a3d", word = 
 describe = 'a boxed aside: ::: {.note label="Short title"} one or two short paragraphs :::'
 
 [components.closing]
+title = "Closing line"
 shape = "container"
 template = "closing.html"
 paragraphs = [1, 3]
@@ -67,6 +69,7 @@ paragraphs = [1, 3]
 # A little poem, one line per paragraph (the example design has one too, so an issue can
 # move between the two).
 [components.poem]
+title = "Poem"
 shape = "container"
 template = "poem.html"
 attrs = { label = "optional" }

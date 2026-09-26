@@ -166,13 +166,14 @@ button { font: inherit; color: inherit; }
 .blk.editing.draft textarea, .blk.editing.component textarea { font-family: var(--mono); font-size: 13.5px; }
 .blk.editing.prose textarea { font-family: var(--mono); font-size: 14.5px; line-height: 1.7; }
 
-.adder { display: flex; gap: 6px; height: 10px; opacity: 0; transition: opacity .12s; margin: -2px 0 2px 10px; }
+.adder { display: flex; flex-wrap: wrap; gap: 6px; height: 10px; overflow: hidden; opacity: 0; transition: opacity .12s;
+         margin: -2px 0 2px 10px; }
 .adder:hover, .adder:focus-within { opacity: 1; height: auto; }
 .adder button, .add-end button { font: 500 10.5px var(--mono); letter-spacing: .08em; text-transform: uppercase;
                                  border: 1px dashed var(--line); background: var(--card); color: var(--ink-3);
                                  border-radius: 6px; padding: 3px 8px; cursor: pointer; }
 .adder button:hover, .add-end button:hover { color: var(--mark); border-color: var(--mark); }
-.add-end { display: flex; gap: 8px; margin: 14px 0 0 10px; }
+.add-end { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0 10px; }
 
 .cta-row { margin-top: 28px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; max-width: 72ch; }
 .cta { display: inline-flex; align-items: center; gap: 9px; background: var(--mark); color: var(--on-mark); border: 0;
@@ -470,3 +471,90 @@ header .logo { display: inline-flex; align-items: center; gap: 8px; }
 header .logo .mill { width: 22px; height: 22px; border-radius: 5px; }
 .thinking-row { display: inline-flex; align-items: center; gap: 8px; }
 .thinking-row .mill { width: 22px; height: 22px; }
+
+/* ── SPEC-BASICS: background notes, research switch, move/delete, notes, boxes ── */
+.background { max-width: 72ch; margin: 18px 0 14px; border: 1px solid var(--line); border-radius: 8px;
+              background: var(--card); padding: 8px 12px; }
+.background summary { cursor: pointer; font: 12px/1.6 var(--sans); color: var(--ink-2); list-style: revert; }
+.background summary b { font-weight: 600; color: var(--ink); }
+.background .bg-sub { color: var(--ink-3); }
+.background .bg-state { color: var(--ink-3); font-family: var(--mono); font-size: 11px; }
+.background .bg-state.bad { color: var(--stop); }
+.background .bg-text { display: block; width: 100%; margin: 8px 0 2px; resize: vertical; min-height: 4.5em;
+                       border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink);
+                       padding: 8px 10px; font: 14px/1.6 var(--sans); overflow: hidden; }
+.background .bg-count { margin: 0; font: 11px var(--mono); color: var(--ink-3); text-align: right; min-height: 1em; }
+.background .bg-count.bad { color: var(--stop); }
+
+.blk .tag .research { font-family: var(--sans); font-size: 11px; letter-spacing: 0; text-transform: none; }
+.blk .tag .research.on { color: var(--mark); border-color: var(--mark); }
+.blk .tag .research:not(.on) { color: var(--ink-3); }
+.blk .tag .research.on::before { content: "⌕ "; }
+
+.blk .mv { min-width: 26px; padding: 3px 6px; }
+.blk > .tools { position: absolute; top: 2px; right: -4px; transform: translateX(100%); display: flex; gap: 4px;
+                opacity: 0; transition: opacity .12s; padding-left: 6px; }
+.blk:hover > .tools, .blk:focus-within > .tools { opacity: 1; }
+@media (hover: none) { .blk > .tools { opacity: .8; } }
+/* Narrow screens: no room to the right of the text, so the buttons sit under it. */
+@media (max-width: 1100px) {
+  .blk > .tools { position: static; transform: none; justify-content: flex-end; padding: 0 4px; height: 0;
+                  overflow: hidden; }
+  .blk:hover > .tools, .blk:focus-within > .tools { height: auto; margin: 2px 0 4px; }
+}
+@media (max-width: 1100px) and (hover: none) { .blk > .tools { height: auto; margin: 2px 0 4px; } }
+
+.wnote { margin: 6px 0 0; padding: 6px 10px; border-radius: 6px; background: var(--mark-soft); color: var(--ink-2);
+         font: 13px/1.5 var(--sans); }
+.dblk .wnote { margin: 8px 0 2px; }
+
+/* The formatting bar rides on the top edge of the paragraph being typed in, over the gap
+   above it, so opening it moves nothing on the page. */
+.blk .fmtbar { display: none; position: absolute; top: -31px; left: 6px; z-index: 6; gap: 2px; padding: 3px;
+               background: var(--ink); border-radius: 7px; box-shadow: 0 2px 8px rgba(0,0,0,.14); }
+.blk.prose.editing .fmtbar { display: flex; }
+.blk .fmtbar button { font: 500 11px/1 var(--mono); letter-spacing: .08em; border: 0; padding: 6px 9px;
+                      border-radius: 5px; color: var(--paper); background: transparent; cursor: pointer; }
+.blk .fmtbar button:hover { background: rgba(255,255,255,.14); }
+.blk .fmtbar button[data-fmt="bold"] { font-weight: 800; }
+.blk .fmtbar button[data-fmt="italic"] { font-style: italic; }
+
+.box-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.box-list button { text-align: left; }
+.details-empty { margin: 0 0 8px; font-size: 12.5px; }
+
+/* ── SPEC-BASICS K: the rewrite list ── */
+.rwbar { position: sticky; top: 64px; z-index: 5; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+         max-width: 72ch; margin: 0 0 14px; padding: 8px 12px; border-radius: 8px; background: var(--mark-soft);
+         border: 1px solid var(--mark); font: 13px/1.4 var(--sans); color: var(--ink); }
+.rwbar > span { margin-right: auto; }
+.rwnote { margin: 6px 0 0; font: 12.5px/1.5 var(--sans); color: var(--mark); }
+.rwnote .linkish { font-size: 12px; }
+.rwbox { margin: 8px 0; }
+.rwbox .rw-text { display: block; width: 100%; resize: vertical; border: 1px solid var(--mark); border-radius: 6px;
+                  background: var(--paper); color: var(--ink); padding: 8px 10px; font: 14px/1.5 var(--sans); }
+.rwbox .edit-row { margin-top: 6px; }
+.blk .tag .acts button.on { color: var(--mark); border-color: var(--mark); }
+.cta-row .rw-all { margin-left: 4px; font-size: 12.5px; }
+
+/* ── SPEC-BASICS L: title suggestions ── */
+.title-row { display: flex; align-items: center; gap: 10px; }
+.title-row .doc-title { flex: 1; min-width: 0; }
+.title-row .suggest-titles { flex: none; white-space: nowrap; }
+.title-picks { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; max-width: 72ch; }
+.title-pick { font: 15px/1.3 var(--serif); padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px;
+              background: var(--card); color: var(--ink); cursor: pointer; text-align: left; }
+.title-pick:hover { border-color: var(--mark); color: var(--mark); }
+.title-acts { display: flex; gap: 10px; align-items: center; margin-left: 4px; font-size: 13px; }
+@media (max-width: 520px) { .title-row { flex-wrap: wrap; } }
+
+/* ── SPEC-FACTS: the fact check on Proof ── */
+.panel.facts .fact-row { border-left: 3px solid var(--line); padding: 4px 0 4px 10px; margin: 0 0 10px; }
+.panel.facts .fact-row.wrong { border-left-color: var(--stop); }
+.panel.facts .fact-row.unclear { border-left-color: var(--warn); }
+.panel.facts .fact-row.ok { border-left-color: var(--run); }
+.panel.facts .fact-quote { margin: 0 0 3px; font: italic 13.5px/1.45 var(--serif); color: var(--ink); overflow-wrap: anywhere; }
+.panel.facts .fact-note { margin: 0 0 5px; font: 12.5px/1.45 var(--sans); color: var(--ink-2); overflow-wrap: anywhere; }
+.panel.facts .fact-row button { white-space: normal; text-align: left; }
+.panel.facts details.fact-ok summary { cursor: pointer; font: 12.5px var(--sans); color: var(--ink-3); margin: 4px 0 8px; }
+.facts-stale { margin: 0 0 8px; font-size: 12.5px; }

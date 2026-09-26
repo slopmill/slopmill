@@ -52,3 +52,5 @@ html[data-theme="dark"] .cmp-pending { color: #9fc0ea; }      /* 9.5:1 on the da
 .cmp-note .cmp-who { font-size: 10px !important; opacity: .7 !important; }
 mark.hl, mark.fix { display: inline !important; visibility: visible !important; opacity: 1 !important; }
 .cmp-note .cmp-x:hover { opacity: 1 !important; color: #d9534a !important; }
+
+mark.fact { background: rgba(224,79,79,.18); color: inherit; border-bottom: 2px solid #c94444; }

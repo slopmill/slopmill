@@ -9,8 +9,14 @@ is trusted to browse on its own here, so slopmill does it the same way for all o
         ──> SOURCES.md, numbered [S1] [S2]…, attached to the writing call
         ──> the writer cites what it used; a chart's Source line names the sites
 
-A prompt is researched when it is a Chart: prompt (the writer may say it needs nothing),
-or when it says "research", "look up" or "find out". A chat question the same.
+Every text or chart prompt is researched when it is drafted, unless its "Look it up" switch
+is off (research=off on the prompt); the planner may still answer NONE for one that needs
+nothing. A revise comment or a chat question is researched when it says "research", "look
+up" or "find out".
+
+DuckDuckGo refuses a machine that searches too often (202, sometimes 403). The same search
+then goes through Jina's reader (r.jina.ai fetching DuckDuckGo Lite), which asks from Jina's
+address; [research] jina = false turns that off.
 """
 import html
 import json
@@ -32,18 +38,20 @@ CHARTISH = re.compile(r"\b(chart|graph|plot)s?\b", re.I)
 SEARCH_RE = re.compile(r"^=== SEARCH #?([A-Za-z][A-Za-z0-9_-]*) ===[ \t]*\n(.*?)\n=== END ===",
                        re.S | re.M)
 MAX_QUERIES = 3          # per item
-MAX_ITEMS = 4            # researched items per pass
+MAX_ITEMS = 8            # researched items per pass (research is on for every prompt)
+MAX_SEARCHES = 12        # per pass, across all items
 PAGES_PER_ITEM = 4
-MAX_PAGES = 8            # per pass
+MAX_PAGES = 12           # per pass
 PAGE_BYTES = 3_000_000
 PAGE_SECONDS = 15
-TOTAL_SECONDS = 120
+TOTAL_SECONDS = 180
 MIN_ROOM = 6_000         # below this there is no point attaching sources
 BROWSER_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
               "Chrome/126.0 Safari/537.36 slopmill-research")
 
 PLAN_SYSTEM = """You plan web research for a writer. For each request below, write the
-web searches that would find the facts and numbers it needs: at most three short search
+web searches that would find the facts and numbers it needs, and a page for each thing it
+asks to link (one search each when it names several): at most three short search
 queries, one per line, the way a person types them into a search engine. Include the year
 when the request is about something recent. The queries go to a public search engine: never
 put private names, unpublished figures or anything from the issue that is not already public
@@ -64,6 +72,12 @@ numbered [S1], [S2]... with each page's address. For those items:
 - Take facts and numbers only from SOURCES.md or the author's own text, never from memory.
 - A chart's SOURCE line lists the sources you used by number, e.g. SOURCE: S1, S3.
 - In text, link each fact you took to its page: [what it says](address).
+- A link goes only to a page about the very thing its words name. If no source is about it
+  (say the prompt names two products and only one has a page here), leave that name unlinked
+  and say so in your NOTE. Never point one thing's name at another thing's page.
+- For a product, company or model, prefer the maker's own site. A site that only looks
+  like the maker's (a similar name on another domain) is not the maker's: if that is all
+  there is, say so in your NOTE rather than calling it official.
 - If the sources disagree, use the most recent or the most official, and say so in your NOTE.
 - If they do not have what is needed, leave it out and say so in your NOTE. Never fill a gap
   with a guess.
@@ -97,6 +111,20 @@ def not_researched(ids):
             f"checked\", and your NOTE must say which were not researched.")
 
 
+def draft_wants_research(block, chart=False, picture=None):
+    """A prompt being drafted: researched unless its switch is off. A picture prompt (the
+    caller passes slopmill's own test, agent.is_picture_prompt) is researched only when it
+    asks for a chart: its numbers need a source."""
+    if (block.attrs or {}).get("research") == "off":
+        return False
+    text = block.text or ""
+    if picture is None:
+        picture = bool(re.match(r"^\s*(image|photo|picture|illustration)\s*:", text, re.I))
+    if picture:
+        return bool(CHARTISH.search(text))
+    return True
+
+
 def wants_research(text, chart=False):
     """A chart always gets asked whether it needs research; anything else when it says so.
     A picture prompt that asks for a chart counts as a chart."""
@@ -112,28 +140,59 @@ class DuckDuckGo:
     URL = "https://html.duckduckgo.com/html/"
 
     GAP, RETRY = 1.2, 4.0
+    JINA = "https://r.jina.ai/https://lite.duckduckgo.com/lite/?q={q}"
 
-    def __init__(self, timeout=20):
+    def __init__(self, timeout=20, jina=True, post=None, get=None, sleep=time.sleep):
         self.timeout = timeout
+        self.jina = jina
         self._last = 0.0
+        self._refused = False     # once DuckDuckGo refuses, go straight to Jina this pass
+        self._post, self._get, self._sleep = post, get, sleep
 
     def search(self, query, limit=6):
         import httpx
-        # Searches back to back look like a robot: a short gap first, and one retry after
-        # a longer one when DuckDuckGo answers 202 (its "slow down").
-        for wait in (self.GAP, self.RETRY):
-            wait_since = time.monotonic() - self._last
-            if wait_since < wait:
-                time.sleep(wait - wait_since)
-            r = httpx.post(self.URL, data={"q": query}, timeout=self.timeout,
-                           headers={"User-Agent": BROWSER_UA})
-            self._last = time.monotonic()
-            if r.status_code != 202:
-                break
+        post = self._post or httpx.post
+        status = None
+        if not (self._refused and self.jina):
+            # Searches back to back look like a robot: a short gap first, and one retry
+            # after a longer one when DuckDuckGo answers 202 (its "slow down").
+            for wait in (self.GAP, self.RETRY):
+                wait_since = time.monotonic() - self._last
+                if wait_since < wait:
+                    self._sleep(wait - wait_since)
+                r = post(self.URL, data={"q": query}, timeout=self.timeout,
+                         headers={"User-Agent": BROWSER_UA})
+                self._last = time.monotonic()
+                status = r.status_code
+                if status != 202:
+                    break
+            if status == 200:
+                found = parse_duckduckgo(r.text)
+                # A real page with no hits says so; a 200 with neither results nor that
+                # is DuckDuckGo's robot check, which is a refusal like 202.
+                if found or re.search(r"no-results|No\s+results", r.text) or not self.jina:
+                    return found[:limit]
+                status = "200 (robot check)"
+            if status not in (202, 403, "200 (robot check)") or not self.jina:
+                raise ResearchError(f"DuckDuckGo answered {status}"
+                                    + (" (too many searches just now)" if status == 202 else ""))
+            self._refused = True
+        return self._via_jina(query, limit, status)
+
+    def _via_jina(self, query, limit, status):
+        from urllib.parse import quote_plus
+        import httpx
+        get = self._get or httpx.get
+        try:
+            r = get(self.JINA.format(q=quote_plus(query)), timeout=max(self.timeout, 30),
+                    headers={"User-Agent": BROWSER_UA, "Accept": "text/plain"})
+        except Exception as e:
+            raise ResearchError(f"DuckDuckGo refused ({status}) and Jina's reader did not answer: "
+                                f"{type(e).__name__}")
         if r.status_code != 200:
-            raise ResearchError(f"DuckDuckGo answered {r.status_code}"
-                                + (" (too many searches just now)" if r.status_code == 202 else ""))
-        return parse_duckduckgo(r.text)[:limit]
+            raise ResearchError(f"DuckDuckGo refused ({status}) and Jina's reader answered "
+                                f"{r.status_code}")
+        return parse_jina_lite(r.text)[:limit]
 
 
 def parse_duckduckgo(page):
@@ -152,6 +211,46 @@ def parse_duckduckgo(page):
         out.append({"title": _text(title), "url": url,
                     "snippet": _text(snippets[i]) if i < len(snippets) else ""})
     return out
+
+
+JINA_RESULT = re.compile(r"^\s*\d+\.\s*\[(.+?)\]\((\S+?)\)\s*$")
+
+
+def parse_jina_lite(text):
+    """DuckDuckGo Lite as Jina's reader prints it: a numbered markdown link per result, then
+    snippet lines, then the result's display address (sometimes with a date)."""
+    out, cur = [], None
+    for line in (text or "").split("\n"):
+        m = JINA_RESULT.match(line)
+        if m:
+            if cur:
+                out.append(cur)
+            url = m.group(2)
+            if "duckduckgo.com/l/" in url:
+                url = unquote(parse_qs(urlsplit(url).query).get("uddg", [""])[0])
+            cur = {"title": _unbold(m.group(1)).strip(), "url": url, "snippet": [],
+                   "ok": url.startswith("https://") and "duckduckgo.com/y.js" not in url}
+            continue
+        if cur and line.strip():
+            cur["snippet"].append(line.strip())
+    if cur:
+        out.append(cur)
+    results = []
+    for c in out:
+        if not c["ok"]:
+            continue                        # adverts, and anything not https
+        lines = c["snippet"]
+        if lines and re.match(r"^[\w.-]+\.[a-z]{2,}(/\S*)?(\d{4}-\d\d-\d\dT\S*)?$", lines[-1]):
+            lines = lines[:-1]              # the display address line
+        results.append({"title": c["title"][:200], "url": c["url"],
+                        "snippet": _unbold(" ".join(lines))[:500]})
+    return results
+
+
+def _unbold(text):
+    """Jina marks each matched word **bold**; two in a row ("**Muse****Spark**") were two
+    words."""
+    return re.sub(r"\*\*", "", re.sub(r"\*\*\*\*", " ", text))
 
 
 class CommandSearch:
@@ -198,15 +297,18 @@ def from_config(cfg, writer=None):
     if kind in ("off", "none", ""):
         return None
     native = writer is not None and getattr(writer, "web_search", False) and hasattr(writer, "web_research")
+    jina = r.get("jina", True)
+    if not isinstance(jina, bool):
+        raise ValueError("[research] jina must be true or false")
     if kind == "auto":
-        return NativeSearch(writer) if native else DuckDuckGo()
+        return NativeSearch(writer) if native else DuckDuckGo(jina=jina)
     if kind == "writer":
         if not native:
             raise ValueError("[research] provider writer needs a writer that searches the web "
                              "itself (OpenAI's or Anthropic's API); use duckduckgo instead")
         return NativeSearch(writer)
     if kind == "duckduckgo":
-        return DuckDuckGo()
+        return DuckDuckGo(jina=jina)
     if kind == "command":
         if not r.get("command"):
             raise ValueError("[research] provider command needs command = \"...\"")
@@ -419,25 +521,58 @@ def gather(plan, requests, searcher, budget, log=lambda level, text: None, cance
     today = time.strftime("%Y-%m-%d")
     picked = {}                 # url -> {"title", "snippet", "for": [ids]}
     order = []
-    for iid, queries in plan.items():
+    searched = 0
+    # Research is on for every prompt, so the first few must not use up the pass: each
+    # item gets an even share of the searches and the pages (at least one of each).
+    n_items = max(1, len(plan))
+    p_share = min(PAGES_PER_ITEM, max(1, MAX_PAGES // n_items))
+    # Searches are handed out in turns: every item's first search, then every item's
+    # second, and so on, until the pass has used its MAX_SEARCHES. An item that planned one
+    # search per thing to look up keeps as many of them as the pass can afford.
+    todo = {iid: list(qs[:MAX_QUERIES]) for iid, qs in plan.items()}
+    allowed = {iid: [] for iid in plan}
+    left = MAX_SEARCHES
+    while left > 0 and any(todo.values()):
+        for iid in plan:
+            if left > 0 and todo[iid]:
+                allowed[iid].append(todo[iid].pop(0))
+                left -= 1
+    for iid, rest in todo.items():
+        for q in rest:
+            log("warn", f"not searched, {MAX_SEARCHES} searches is the most in one pass: “{q}”")
+    # The searches run in the same turns, so a slow start cannot use up the time before the
+    # last item's first search.
+    turns = []
+    for k in range(MAX_QUERIES):
+        turns += [(iid, allowed[iid][k]) for iid in plan if k < len(allowed[iid])]
+    lists = {iid: [] for iid in plan}
+    for iid, q in turns:
+        if cancel is not None and cancel.is_set():
+            return [], ""
+        if clock() - start > TOTAL_SECONDS / 2:      # half the time is for reading the pages
+            log("warn", f"research time is short; skipped the search “{q}”")
+            continue
+        searched += 1
+        try:
+            results = searcher.search(q)
+        except Exception as e:
+            log("warn", f"search failed for “{q}”: {e}")
+            continue
+        via = " (through Jina's reader: DuckDuckGo refused)" if getattr(searcher, "_refused", False) else ""
+        log("info", f"searched “{q}”{via}: {len(results)} result(s)")
+        lists[iid].append(results)
+    for iid in plan:
+        # Pages come from each of the item's searches in turn (the top result of each, then
+        # the second...): a prompt naming JEV and Laya gets a page for each.
+        lists_i = lists[iid]
         n_for = 0
-        for q in queries:
-            if cancel is not None and cancel.is_set():
-                return [], ""
-            if len(order) >= MAX_PAGES or n_for >= PAGES_PER_ITEM:
-                break
-            if clock() - start > TOTAL_SECONDS / 2:      # half the time is for reading the pages
-                log("warn", f"research time is short; skipped the search “{q}”")
-                continue
-            try:
-                results = searcher.search(q)
-            except Exception as e:
-                log("warn", f"search failed for “{q}”: {e}")
-                continue
-            log("info", f"searched “{q}”: {len(results)} result(s)")
-            for res in results:
-                if n_for >= PAGES_PER_ITEM or len(order) >= MAX_PAGES:
+        for rank in range(max((len(x) for x in lists_i), default=0)):
+            for results in lists_i:
+                if n_for >= p_share or len(order) >= MAX_PAGES:
                     break
+                if rank >= len(results):
+                    continue
+                res = results[rank]
                 u = res["url"]
                 if u in picked:
                     if iid not in picked[u]["for"]:

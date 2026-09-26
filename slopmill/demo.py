@@ -21,7 +21,7 @@ import shutil
 import threading
 import time
 
-from .agent import ASK_MARK
+from .agent import ASK_MARK, TITLES_RULES
 from .pack import load_pack
 from .providers import Cancelled, Reply
 
@@ -81,6 +81,11 @@ class DemoWriter:
         "changing anything. It can look things up for you too. Here is the kind of prompt it "
         "might suggest; press Add to Plan to try it:\n"
         "=== PROMPT ===\nChart: honey pots left on the shelf. Monday 4, Tuesday 3, Wednesday 1, Thursday 0\n=== END ===")
+    TITLES = [
+        "A stand-in title: the demo reads nothing",
+        "Installed, slopmill suggests six from your issue",
+        "In your own way of naming things",
+    ]
     FIXES = [("teh", "the", "spelling"), ("recieve", "receive", "spelling"),
              ("seperate", "separate", "spelling"), ("alot", "a lot", "spelling"),
              ("it's own", "its own", "its/it's")]
@@ -110,6 +115,9 @@ class DemoWriter:
             return Reply(self._proof(files), {"in": len(prompt) // 4, "out": 40, "exact": False})
         if ASK_MARK in system:
             text = self.ANSWER
+            return Reply(text, {"in": len(prompt) // 4, "out": len(text) // 4, "exact": False})
+        if TITLES_RULES in system:
+            text = "\n".join(self.TITLES)
             return Reply(text, {"in": len(prompt) // 4, "out": len(text) // 4, "exact": False})
         ids, pics, graphs = _ids(prompt)
         document = ""
@@ -199,8 +207,9 @@ class Sessions:
     `idle` seconds without a request. At most `limit` at once (the least recently used goes
     first) and at most `per_ip` new ones an hour from one address."""
 
-    def __init__(self, make_app, root, template, limit=60, idle=1800, per_ip=20):
+    def __init__(self, make_app, root, template, limit=60, idle=1800, per_ip=20, with_ip=False):
         self.make_app, self.root, self.template = make_app, root, template
+        self.with_ip = with_ip        # make_app(workspace, sid, ip): the trial limits calls per address
         self.limit, self.idle, self.per_ip = limit, idle, per_ip
         self.live = collections.OrderedDict()        # id -> [app, last_seen, dir]
         self.sizes = {}                               # id -> (bytes, measured at)
@@ -236,7 +245,7 @@ class Sessions:
             self.live[sid] = [None, now, d]          # counted from now: the cap cannot be overshot
         try:
             shutil.copytree(self.template, d)
-            app = self.make_app(d, sid)
+            app = self.make_app(d, sid, ip) if self.with_ip else self.make_app(d, sid)
         except Exception:
             with self.lock:
                 self.live.pop(sid, None)

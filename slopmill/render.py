@@ -317,12 +317,17 @@ def _figure(ctx, comp, children, attrs):
                    params=comp.params)
 
 
+BOX_PLACEHOLDER = "Write here."   # what the editor's "+ Box" puts in a new box (app.js)
+
+
 def _container(ctx, comp, children, attrs):
     paras = []
     for ch in children:
         if ch["t"] not in ("Para", "Plain"):
             ctx.problem(f"::: {{.{comp.name}}} holds paragraphs only, found {ch['t']}")
             continue
+        if plain(ch["c"], ctx).strip() == BOX_PLACEHOLDER:
+            ctx.problem(f"the {comp.label} box still says “{BOX_PLACEHOLDER}”: write what goes in it")
         paras.append(Markup(inlines(ch["c"], ctx)))
     n = len(paras)
     if not comp.min_paragraphs <= n <= comp.max_paragraphs:

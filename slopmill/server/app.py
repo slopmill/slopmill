@@ -22,7 +22,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTe
                                RedirectResponse, Response)
 from sse_starlette.sse import EventSourceResponse
 
-from .. import agent, doc, export, metadata, proof, quickcheck, render
+from .. import agent, doc, export, metadata, proof, quickcheck, render, facts
 from ..net import MAX_ASSET_BYTES, Fetched, FetchRefused, _check_public, fetch_public  # noqa: F401
 from ..providers import sniff_image
 from ..designs import DesignError, DesignLibrary
@@ -41,6 +41,7 @@ COOKIE = "slopmill_token"
 MAX_UPLOAD = 15_000_000          # a picture of the author's own
 DEMO_MAX_UPLOAD = 2_000_000
 MAX_QUESTION = 4000
+MAX_REWRITE_NOTE = 2000     # one rewrite direction (SPEC-BASICS 20)
 CLEANING = threading.BoundedSemaphore(1)
 DEMO_MAX_ISSUES = 8
 OLD_COOKIE = "compositor_token"      # a browser signed in before the rename
@@ -89,9 +90,13 @@ def shipped_packs():
 
 
 def create_app(*, workspace, pack, llm, model_label="model", lint_argv=None, token=None,
-               images=None, plan=None, config_path=None, demo=False, checker=None, research=None):
+               images=None, plan=None, config_path=None, demo=False, checker=None, research=None,
+               trial=None):
     """demo=True is the public click-through (slopmill.demo): no design uploads, no pictures
     fetched from other sites, at most DEMO_MAX_ISSUES issues, and the page says it is a demo."""
+    # The fact check opens the issue's links and searches the web: never on a visitor's behalf
+    # in the public demo (the trial, which has a real writer and research, keeps it).
+    facts_on = not (demo and research is None)
     designs = DesignLibrary(workspace, pack)
     ws = Workspace(workspace, pack, designs)
     voices = VoiceLibrary(ws.root)
@@ -193,10 +198,25 @@ def create_app(*, workspace, pack, llm, model_label="model", lint_argv=None, tok
         limit = getattr(llm, "max_request_bytes", agent.MAX_PAYLOAD)
         try:
             size = agent.request_size(llm, design_of(iss), voice_of(iss), images, meta, blocks,
-                                      "x" * ASK_ALLOWANCE + extra, image_dirs_of(iss))
+                                      "x" * ASK_ALLOWANCE + extra, image_dirs_of(iss),
+                                      iss.background())
         except (OSError, VoiceError) as e:
             return {"bytes": None, "limit": limit, "error": str(e)}
         return {"bytes": size, "limit": limit, "tokens": size // 4}
+
+    def headings_state(iss, blocks):
+        """Only for a design that asks for section headings (SPEC-HEADINGS 3, 9)."""
+        d = design_of(iss)
+        if not d.headings:
+            return {}
+        needed = agent.headings_needed(d, blocks) and \
+            agent.changed_since(iss.review().get("headings_for"), blocks)
+        return {"headings": {"on": True, "needed": needed}}
+
+    def facts_state(iss, blocks):
+        """Whether the facts were checked on the text as it stands (SPEC-FACTS 8)."""
+        f = iss.review().get("facts")
+        return {"facts_current": bool(f) and f.get("seen") == facts.fingerprint(blocks)}
 
     def state_of(iss):
         meta, blocks, rev, _ = iss.load()
@@ -227,7 +247,11 @@ def create_app(*, workspace, pack, llm, model_label="model", lint_argv=None, tok
                 "fields": d.meta_fields, "required": d.meta_required, "accents": d.accents,
                 "voice": v.summary() if v else None, "lint": bool(lint_argv) and d is pack,
                 "next_request": next_request(iss, meta, blocks), "asking": iss.slug in asking,
-                "figure": bool(d.figure_component()), "sources": sources}
+                "figure": bool(d.figure_component()), "sources": sources,
+                "background": iss.background(), "background_max": agent.BACKGROUND_MAX,
+                "boxes": [{"name": c.name, "title": c.label, "label": "label" in c.attrs}
+                          for c in d.components.values() if c.shape == "container"],
+                **headings_state(iss, blocks), **facts_state(iss, blocks)}
 
     def problems_by_block(iss):
         """{block id: [message]} plus "" for problems that belong to no block."""
@@ -316,7 +340,9 @@ def create_app(*, workspace, pack, llm, model_label="model", lint_argv=None, tok
                 "default_design": pack.name,
                 "default_voice": pack.name if pack.name in voices.names() else None,
                 "providers": providers_info(), "pictures": images is not None, "demo": demo,
+                "trial": trial() if trial else None,
                 "research": research.label if research is not None else None,
+                "facts": facts_on,
                 "quickcheck": checker is not None and not demo}
 
     @app.post("/api/issues")
@@ -394,7 +420,8 @@ def create_app(*, workspace, pack, llm, model_label="model", lint_argv=None, tok
         except doc.DocError as e:
             return err(422, str(e))
         m2, b2, _, _ = iss.load()
-        return {"rev": rev, "problems": problems_by_block(iss), "next_request": next_request(iss, m2, b2)}
+        return {"rev": rev, "problems": problems_by_block(iss), "next_request": next_request(iss, m2, b2),
+                **headings_state(iss, b2), **facts_state(iss, b2)}
 
     def lock_in(iss, meta, blocks, rev, target, text, label):
         """Replace one block with `text` as the author's own words, and save. A draft
@@ -452,6 +479,27 @@ def create_app(*, workspace, pack, llm, model_label="model", lint_argv=None, tok
         if label == "edit":
             iss.update_review(stale_fixes)
         return new_rev, [i for i in ids if i]
+
+    @app.put("/api/issues/{slug}/background")
+    async def save_background(slug: str, request: Request):
+        """The author's Background notes: sent with every writing call, never printed."""
+        iss = issue_or_404(slug)
+        if not iss:
+            return err(404, "no such issue")
+        body = await request.json()
+        text = body.get("text")
+        if not isinstance(text, str):
+            return err(422, "the Background notes must be text")
+        text = text.replace("\r\n", "\n")
+        if len(text.encode()) > agent.BACKGROUND_MAX:
+            return err(422, f"the Background notes are {len(text.encode()) // 1024}KB; they can be "
+                            f"at most {agent.BACKGROUND_MAX // 1024}KB")
+        with iss.lock:   # a pass reads them when it starts
+            if runner.current(slug):
+                return err(409, "the model is working on this issue; wait for it to finish")
+            iss.save_background(text)
+        m2, b2, _, _ = iss.load()
+        return {"ok": True, "next_request": next_request(iss, m2, b2)}
 
     @app.post("/api/issues/{slug}/keep")
     async def keep_draft(slug: str, request: Request):
@@ -688,7 +736,7 @@ def create_app(*, workspace, pack, llm, model_label="model", lint_argv=None, tok
         nr = next_request(iss, meta, blocks, extra)
         if nr.get("bytes") and nr["bytes"] > nr["limit"]:
             return err(422, f"the next request would be {nr['bytes'] // 1024}KB and the writer "
-                            f"takes at most {nr['limit'] // 1024}KB: turn off some voice files "
+                            f"takes at most {nr['limit'] // 1024}KB: shorten the Background notes, turn off some voice files "
                             f"or shorten the issue")
         return None
 
@@ -708,8 +756,15 @@ def create_app(*, workspace, pack, llm, model_label="model", lint_argv=None, tok
             targets = [p.id for p in prompts
                        if p.id not in drafts or drafts[p.id].attrs.get("prompt") != doc.prompt_hash(p.text)]
         direction = (body.get("direction") or "").strip()
+        # The author's directions for rewriting some of the drafts (SPEC-BASICS 20).
+        notes = body.get("notes") or {}
+        if not isinstance(notes, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in notes.items()):
+            return err(422, "notes must map prompt IDs to text")
+        if any(len(v) > MAX_REWRITE_NOTE for v in notes.values()):
+            return err(422, f"a rewrite direction is at most {MAX_REWRITE_NOTE:,} characters")
+        notes = {k: v.strip() for k, v in notes.items() if k in targets and v.strip()}
         if targets:
-            refused = too_big(iss, meta, blocks, direction)
+            refused = too_big(iss, meta, blocks, direction + "".join(notes.values()))
             if refused:
                 return refused
         if not targets:
@@ -728,8 +783,16 @@ def create_app(*, workspace, pack, llm, model_label="model", lint_argv=None, tok
                 direction=direction, cancel=job.cancel, log=log, block_event=block_event,
                 voice=voice_of(iss), images=images, images_dir=images_dir_of(iss),
                 image_dirs=image_dirs_of(iss), searcher=research,
-                on_usage=usage_recorder(iss, job), created=job.created)
+                on_usage=usage_recorder(iss, job), created=job.created,
+                background=iss.background(), notes=notes)
             commit(job, iss, rev_, new_blocks if new_blocks is not blocks_ else None)
+            # The writer's lines about one prompt go on that prompt (and its draft).
+            # A prompt that got no new draft keeps its old note (unless the writer left a
+            # new one about it).
+            old_drafts = {b.attrs.get("for"): b.id for b in blocks_ if b.type == "draft"}
+            redone = [t for t in targets if t not in failures]
+            iss.set_notes(redone + [old_drafts[t] for t in redone if t in old_drafts],
+                          agent.split_note(note, set(targets)))
             written = len(targets) - len(failures)
             log("ok" if not failures else "warn", f"wrote {written} of {len(targets)} draft(s)")
             if note:
@@ -743,6 +806,46 @@ def create_app(*, workspace, pack, llm, model_label="model", lint_argv=None, tok
         if direction:          # only once the pass that reads it has started
             iss.chat("user", direction)
         return {"job": job.to_json(), "targets": targets}
+
+    @app.post("/api/issues/{slug}/headings")
+    async def headings(slug: str, request: Request):
+        """Add the missing section headings, for a design that asks (SPEC-HEADINGS)."""
+        iss = issue_or_404(slug)
+        if not iss:
+            return err(404, "no such issue")
+        if not design_of(iss).headings:
+            return err(422, f"the design {design_of(iss).name} does not add section headings")
+        meta, blocks, _, _ = iss.load()
+        refused = too_big(iss, meta, blocks)
+        if refused:
+            return refused
+
+        def work(job, log, block_event):
+            meta_, blocks_, rev_, _ = iss.load()
+            log("info", f"looking for sections without a heading · calling {model_label}")
+            new_blocks, added, note, dropped = agent.add_headings(
+                design_of(iss), meta_, blocks_, llm, workdir=os.path.join(iss.dir, ".runs"),
+                cancel=job.cancel, log=log, voice=voice_of(iss), on_usage=usage_recorder(iss, job),
+                image_dirs=image_dirs_of(iss), background=iss.background())
+            for why in dropped:
+                log("warn", f"heading not added: {why}")
+            commit(job, iss, rev_, new_blocks if added else None)
+            # Recorded only once the pass has written (or found nothing to add): a pass that
+            # failed or was stopped is tried again next time.
+            # A pass that hit the cap may have left sections without one: ask again next time.
+            if len(added) < agent.MAX_NEW_HEADINGS:
+                done_for = agent.headings_seen(blocks_)
+                iss.update_review(lambda d: d.__setitem__("headings_for", done_for))
+            log("ok", f"added {len(added)} heading(s)" + (": " + " · ".join(added) if added else ""))
+            if note:
+                iss.chat("model", note)
+                runner.bus(iss.slug).publish("chat", role="model", text=note)
+            after_pass(iss, log)
+
+        job = start_pass(iss, "headings", work)
+        if not job:
+            return err(409, "the model is already working on this issue")
+        return {"job": job.to_json()}
 
     @app.post("/api/issues/{slug}/revise")
     async def revise(slug: str, request: Request):
@@ -771,7 +874,7 @@ def create_app(*, workspace, pack, llm, model_label="model", lint_argv=None, tok
                 block_event=block_event, voice=voice_of(iss), images=images,
                 images_dir=images_dir_of(iss), image_dirs=image_dirs_of(iss),
                 on_usage=usage_recorder(iss, job), searcher=research,
-                created=job.created)
+                created=job.created, background=iss.background())
             def mark(d):
                 for c in d["comments"]:
                     if c["id"] not in ids:
@@ -787,6 +890,18 @@ def create_app(*, workspace, pack, llm, model_label="model", lint_argv=None, tok
                                            "job": job.id, "ts": time.time(), **p})
             commit(job, iss, rev_, new_blocks if new_blocks is not blocks_ else None,
                    then=lambda: iss.update_review(mark))
+            # A note about a revised draft belongs to its prompt, where Plan and Draft both
+            # look first; one about your own words stays on that block.
+            kinds = {b.id: b for b in blocks_}
+
+            def owner(i):
+                b = kinds.get(i)
+                return b.attrs.get("for") if b is not None and b.type == "draft" and b.attrs.get("for") else i
+            named = {c.get("block") for c in queued if c.get("block")}
+            notes = {}
+            for k, v in agent.split_note(note, named | {owner(i) for i in named}).items():
+                notes[owner(k)] = (notes.get(owner(k), "") + " " + v).strip()
+            iss.set_notes(sorted({x for a in answered for x in (a, owner(a))}), notes)
             if proposals:
                 log("ok", f"{len(proposals)} change(s) to your own words proposed; accept or reject them")
             if note:
@@ -842,7 +957,8 @@ def create_app(*, workspace, pack, llm, model_label="model", lint_argv=None, tok
                     answer = agent.ask(design_of(iss), meta, blocks, text, history, llm,
                                        workdir=os.path.join(iss.dir, ".runs"), voice=voice_of(iss),
                                        on_usage=usage_recorder(iss, job),
-                                       image_dirs=image_dirs_of(iss), searcher=research)
+                                       image_dirs=image_dirs_of(iss), searcher=research,
+                                       background=iss.background())
                 finally:
                     MODEL_SLOT.release()
             except Exception as e:
@@ -860,6 +976,44 @@ def create_app(*, workspace, pack, llm, model_label="model", lint_argv=None, tok
 
         threading.Thread(target=work, name=f"ask-{slug}", daemon=True).start()
         return {"asking": True, "id": entry["id"]}
+
+    # ── title suggestions (SPEC-BASICS L) ─────────────────────────────────────────
+    titling = set()
+
+    @app.post("/api/issues/{slug}/titles")
+    def suggest_titles(slug: str):
+        """Titles from what is on the page. Plain def: it waits for the model in a worker
+        thread, not in the server's event loop."""
+        iss = issue_or_404(slug)
+        if not iss:
+            return err(404, "no such issue")
+        meta, blocks, _, _ = iss.load()
+        if not any(b.type in ("prose", "draft") and b.text.strip() for b in blocks) \
+                and not iss.background().strip():
+            return err(422, "there is nothing on the page to suggest a title from yet")
+        with asking_lock:
+            if slug in titling:
+                return err(409, "titles are already being suggested for this issue")
+            titling.add(slug)
+        try:
+            if runner.current(slug):
+                return err(409, "the model is working on this issue; try again when it finishes")
+            if not MODEL_SLOT.acquire(timeout=5):
+                return err(409, "the model is busy on this computer; try again in a moment")
+            try:
+                job = SimpleNamespace(id="titles-" + uuid.uuid4().hex[:8], kind="titles")
+                got = agent.suggest_titles(design_of(iss), meta, blocks, llm,
+                                           workdir=os.path.join(iss.dir, ".runs"), voice=voice_of(iss),
+                                           on_usage=usage_recorder(iss, job), image_dirs=image_dirs_of(iss),
+                                           background=iss.background())
+            finally:
+                MODEL_SLOT.release()
+        except (agent.LLMError, VoiceError) as e:
+            return err(502, f"no titles: {e}")
+        finally:
+            with asking_lock:
+                titling.discard(slug)
+        return {"titles": got}
 
     # ── the author's own picture (SPEC-CHAT-PICTURES 8-11) ───────────────────────
     @app.post("/api/issues/{slug}/pictures")
@@ -1139,6 +1293,107 @@ def create_app(*, workspace, pack, llm, model_label="model", lint_argv=None, tok
         if not job:
             return err(409, "the model is already working on this issue")
         return {"job": job.to_json()}
+
+    # ── check the facts (SPEC-FACTS) ────────────────────────────────────────────────
+    @app.post("/api/issues/{slug}/facts")
+    def facts_start(slug: str):
+        if not facts_on:
+            return err(403, "the fact check is off in the demo: it reads the web, and the demo "
+                            "does not. Install slopmill to use it")
+        iss = issue_or_404(slug)
+        if not iss:
+            return err(404, "no such issue")
+        if runner.current(slug):
+            return err(409, "the model is already working on this issue")
+        _, blocks, _, _ = iss.load()
+        if not proof.checkable(blocks):
+            return err(422, "there is no text to check yet")
+
+        def work(job, log, block_event):
+            meta_, blocks_, rev_, _ = iss.load()
+            log("info", f"checking the facts in {len(proof.checkable(blocks_))} block(s) · calling {model_label}")
+            try:
+                record = facts.check(meta_, blocks_, llm, searcher=research,
+                                     workdir=os.path.join(iss.dir, ".runs"), cancel=job.cancel, log=log,
+                                     on_usage=usage_recorder(iss, job))
+            except facts.FactError as e:
+                raise agent.LLMError(str(e))
+            record["job"] = job.id
+
+            def keep():
+                if iss.read()[1] != rev_:
+                    raise RuntimeError("the issue changed during the check; check again")
+                iss.update_review(lambda d: d.__setitem__("facts", record))
+            commit(job, iss, rev_, None, then=keep)
+
+        job = start_pass(iss, "facts", work)
+        if not job:
+            return err(409, "the model is already working on this issue")
+        return {"job": job.to_json()}
+
+    @app.post("/api/issues/{slug}/facts/{fid}")
+    async def facts_toggle(slug: str, fid: str, request: Request):
+        """Use one correction (applied: true), or put the words back (false)."""
+        iss = issue_or_404(slug)
+        if not iss:
+            return err(404, "no such issue")
+        body = await request.json()
+        want = body.get("applied")
+        if not isinstance(want, bool):
+            return err(422, "say applied: true or false")
+        with iss.lock:
+            if runner.current(slug):
+                return err(409, "the model is working on this issue")
+            review = iss.review()
+            item = next((f for f in (review.get("facts") or {}).get("items") or [] if f["id"] == fid), None)
+            if not item or not item.get("fix"):
+                return err(404, "no such correction")
+            if item.get("applied") == want:
+                return {"ok": True, "rev": iss.read()[1], "item": item}
+            meta, blocks, rev, _ = iss.load()
+            # The whole paragraph must be as the check read it (or as this fix left it): a
+            # sentence edited around the claim may no longer mean what was checked.
+            now = facts.block_sha(blocks, item["block"])
+            expect = item.get("applied_sha") if not want else item.get("block_seen")
+            if expect and now != expect:
+                return err(409, "that paragraph has changed since the check: check the facts again",
+                           item=item)
+            fx = {"block": item["block"], "before": item["fix"]["before"], "after": item["fix"]["after"]}
+            try:
+                new_blocks = proof.toggle(blocks, fx, want)
+            except proof.Stale as e:
+                return err(409, str(e), item=item)
+            if new_blocks is not blocks:
+                iss.snapshot("fact fix")
+                new_rev = iss.save(meta, new_blocks, base=rev)[0]
+            else:
+                new_rev = rev
+            item["applied"] = want
+            after = facts.block_sha(new_blocks, item["block"])
+            item["applied_sha"] = after if want else None
+            # The other claims in this paragraph were read in the text this fix just changed:
+            # they follow it, so two corrections in one paragraph can both be used.
+            for other in review["facts"].get("items") or []:
+                if other is not item and other["block"] == item["block"]:
+                    if other.get("block_seen") == now:
+                        other["block_seen"] = after
+                    if other.get("applied_sha") == now:
+                        other["applied_sha"] = after
+            # The check read the text before this fix: the fix itself does not make it stale.
+            f = review["facts"]
+            if f.get("seen") == facts.fingerprint(blocks):
+                f["seen"] = facts.fingerprint(new_blocks)
+            iss.save_review(review)
+        runner.bus(slug).publish("doc", rev=new_rev)
+        return {"ok": True, "rev": new_rev, "item": item}
+
+    @app.delete("/api/issues/{slug}/facts")
+    def facts_clear(slug: str):
+        iss = issue_or_404(slug)
+        if not iss:
+            return err(404, "no such issue")
+        iss.update_review(lambda d: d.pop("facts", None))
+        return {"ok": True}
 
     @app.post("/api/issues/{slug}/quickcheck")
     def quickcheck_start(slug: str):

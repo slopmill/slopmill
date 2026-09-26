@@ -45,7 +45,9 @@ IMAGE_TYPES = {b"\xff\xd8\xff": ".jpg", b"\x89PNG\r\n\x1a\n": ".png"}
 
 
 class LLMError(Exception):
-    pass
+    def __init__(self, *args, status=None):
+        super().__init__(*args)
+        self.status = status         # the provider's HTTP status when it answered with an error
 
 
 class Cancelled(Exception):
@@ -214,7 +216,9 @@ class OpenAIText:
     kind = "openai"
 
     def __init__(self, model, key_env="OPENAI_API_KEY", base_url=OPENAI_BASE, label=None,
-                 max_request_bytes=HTTP_MAX_REQUEST, reasoning_effort=None, transport=None):
+                 max_request_bytes=HTTP_MAX_REQUEST, reasoning_effort=None, transport=None,
+                 max_output_tokens=None):
+        self.max_output_tokens = max_output_tokens     # a cap the hosted trial's budget relies on
         self.model = model
         self.key_env = key_env
         self.base_url = base_url.rstrip("/")
@@ -232,6 +236,8 @@ class OpenAIText:
             {"role": "user", "content": prompt + ("\n\n" + _attachments(files) if files else "")}]}
         if self.reasoning_effort:
             body["reasoning_effort"] = self.reasoning_effort
+        if self.max_output_tokens:
+            body["max_completion_tokens"] = int(self.max_output_tokens)
         headers = {"Authorization": f"Bearer {key}"} if key else {}
         client = httpx.Client(timeout=httpx.Timeout(timeout, connect=20), transport=self.transport)
 
@@ -246,7 +252,8 @@ class OpenAIText:
             if stop.is_set():
                 raise Cancelled()
             if r.status_code != 200:
-                raise LLMError(f"the model returned HTTP {r.status_code}: {_scrub(_error_text(r), key)}")
+                raise LLMError(f"the model returned HTTP {r.status_code}: {_scrub(_error_text(r), key)}",
+                               status=r.status_code)
             try:
                 data = r.json()
                 text = data["choices"][0]["message"]["content"] or ""

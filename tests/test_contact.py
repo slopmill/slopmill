@@ -156,6 +156,8 @@ def test_the_built_site_hides_donations_until_the_page_exists():
     import os
     import sys
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if not os.path.exists(os.path.join(root, "site", "pages.py")):
+        pytest.skip("slopmill.org's own pages are not part of the published code")
     sys.path.insert(0, os.path.join(root, "site"))
     pages = importlib.import_module("pages")
     pages.SPONSOR = None
